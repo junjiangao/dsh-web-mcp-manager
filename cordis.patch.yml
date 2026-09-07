@@ -1,0 +1,5 @@
+# Optional profile overlay. Installers may apply this patch to a Web profile
+# after building the package; the default profile is intentionally untouched.
+- insert:
+    - id: web-mcp-manager
+      name: 'dsh-web-mcp-manager'
