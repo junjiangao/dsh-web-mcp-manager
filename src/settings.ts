@@ -1,22 +1,26 @@
 /** Host settings schema and defaults for the MCP manager namespace. */
 
 import z from '@deepseek-ai/schemastery'
+import type { ResolvedReconnectPolicy } from '@deepseek-ai/dsh-mcp-client'
+import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
+import type { SettingsNamespace as DshSettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {
   ReconnectPolicy, ServerTransport, SettingsDocument, StoredReconnectPolicy, StoredServer,
 } from './types.ts'
-import type { SettingsNamespace as DshSettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { validateMcpConfig } from './host/mcp-config.ts'
 
 export const MANAGER_NAMESPACE = 'web-mcp-manager' as DshSettingsNamespace
 
+// 数值与 @deepseek-ai/dsh-mcp-client 的 RECONNECT_DEFAULTS 一致,由 tests/config-validation.spec.ts 奇偶校验守护。
 export const DEFAULT_RECONNECT: StoredReconnectPolicy = Object.freeze({
   enabled: true,
   initialDelayMs: 500,
   maxDelayMs: 30_000,
   maxAttempts: 10,
 })
+const _reconnectDefaultsCheck: ResolvedReconnectPolicy = DEFAULT_RECONNECT
 
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000
-const MAX_TIMER_DELAY_MS = 2_147_483_647
 
 const ReconnectSchema: z<StoredReconnectPolicy> = z.object({
   enabled: z.boolean().default(DEFAULT_RECONNECT.enabled),
@@ -116,6 +120,8 @@ export function validateServerConfig(server: StoredServer): void {
     if (key.trim() === '') throw new Error(`server ${JSON.stringify(server.id)} contains an empty header key`)
     if (typeof value !== 'string') throw new Error(`server ${JSON.stringify(server.id)} header values must be strings`)
   }
+  // 委托给 mcp-client 的 Config schema 校验 args/env/headers 形状与重连边界。
+  validateMcpConfig(server)
 }
 
 export function validateReconnect(value: ReconnectPolicy): void {

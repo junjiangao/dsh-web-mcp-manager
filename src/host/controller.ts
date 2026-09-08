@@ -5,12 +5,14 @@ import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { PluginInventorySnapshot } from '@deepseek-ai/dsh-host-plugin-inventory/types'
-import { apply as mcpApply, Config as McpConfig, type Config as McpServerConfig } from '@deepseek-ai/dsh-mcp-client'
+import { apply as mcpApply, Config as McpConfig } from '@deepseek-ai/dsh-mcp-client'
 import type { SettingsScope, SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import type { SettingsDocument, StoredServer, ManagedServerView, ManagedToolView, ReadonlyMcpEntry, RpcError, RpcResult } from '../types.ts'
 import {
+  LEGACY_PLUGIN_MODULE_NAME,
   MCP_MANAGER_CHANNEL,
+  PLUGIN_MODULE_NAME,
   type ManagerRpcEndpoint,
   type ReloadServerRequest,
   type SetServerEnabledRequest,
@@ -20,6 +22,7 @@ import {
   type UpsertServerRequest,
 } from '../types.ts'
 import { MANAGER_NAMESPACE, ManagerSettingsSchema, defaultDocument, validateStoredDocument } from '../settings.ts'
+import { toMcpConfig } from './mcp-config.ts'
 import {
   isRecord,
   mergeServerPatch,
@@ -389,7 +392,7 @@ export class McpManagerController {
     try {
       const value = await inventory.list()
       const loaderEntries: ReadonlyMcpEntry[] = value.entries
-        .filter(entry => entry.moduleName !== 'dsh-web-mcp-manager' && entry.moduleName.toLocaleLowerCase().includes('mcp'))
+        .filter(entry => entry.moduleName !== PLUGIN_MODULE_NAME && entry.moduleName !== LEGACY_PLUGIN_MODULE_NAME && entry.moduleName.toLocaleLowerCase().includes('mcp'))
         .map(entry => ({ ...entry, source: 'loader' as const }))
       const presetEntries: ReadonlyMcpEntry[] = []
       for (const preset of value.agentPresets ?? []) {
@@ -464,32 +467,6 @@ export class McpManagerController {
   }
 }
 
-function toMcpConfig(server: StoredServer): McpServerConfig {
-  const reconnect = { ...server.reconnect }
-  if (server.transport === 'stdio') {
-    return {
-      transport: 'stdio',
-      serverName: server.id,
-      command: server.command,
-      args: [...server.args],
-      cwd: server.cwd,
-      env: { ...server.env },
-      toolCallTimeoutMs: server.toolCallTimeoutMs,
-      failOnStartupError: true,
-      reconnect,
-    }
-  }
-  return {
-    transport: 'streamable-http',
-    serverName: server.id,
-    url: server.url,
-    headers: { ...server.headers },
-    toolCallTimeoutMs: server.toolCallTimeoutMs,
-    failOnStartupError: true,
-    reconnect,
-  }
-}
-
 function stableFingerprint(value: unknown): string {
   return JSON.stringify(sortValue(value))
 }
@@ -518,6 +495,7 @@ function failure(code: RpcError['code'], message: string): RpcResult<never> {
 
 function classifyError(error: unknown): RpcError['code'] {
   const code = (error as { code?: unknown } | null)?.code
+  if (code === 'MCP_CONFIG_VALIDATION') return 'validation'
   if (code === 'SETTINGS_CONFLICT') return 'conflict'
   if (error instanceof TypeError) return 'bad-request'
   if (typeof error === 'object' && error !== null && 'message' in error && String((error as { message: unknown }).message).includes('read-only')) return 'not-writable'
