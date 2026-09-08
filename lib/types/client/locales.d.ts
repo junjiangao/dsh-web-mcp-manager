@@ -51,6 +51,10 @@ export declare const zh: {
     readonly sourceLoader: "Loader";
     readonly sourcePreset: "预设";
     readonly conditional: "条件启用";
+    readonly basic: "基本配置";
+    readonly advanced: "高级选项";
+    readonly status: "状态";
+    readonly params: "参数";
 };
 export type McpLocaleKey = keyof typeof zh;
 export declare const en: Record<McpLocaleKey, string>;

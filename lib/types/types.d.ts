@@ -153,4 +153,10 @@ export interface StoredServerPatch {
     readonly reconnect?: Partial<StoredReconnectPolicy>;
 }
 export declare function isRpcResult<T>(value: unknown): value is RpcResult<T>;
+/** 插件的社区注册身份(GitHub owner/repo)。 */
+export declare const PLUGIN_IDENTITY: "junjiangao/dsh-web-mcp-manager";
+/** 插件安装后的 npm 包名 / loader 模块名(bundle 层与 patch 条目 name)。 */
+export declare const PLUGIN_MODULE_NAME: "@junjiangao/dsh-web-mcp-manager";
+/** 旧包名,仅用于已安装 profile 的过渡期识别(只读条目过滤),勿在生产路径使用。 */
+export declare const LEGACY_PLUGIN_MODULE_NAME: "dsh-web-mcp-manager";
 //# sourceMappingURL=types.d.ts.map

@@ -1,7 +1,7 @@
 /** Host settings schema and defaults for the MCP manager namespace. */
 import z from '@deepseek-ai/schemastery';
-import type { ReconnectPolicy, ServerTransport, SettingsDocument, StoredReconnectPolicy, StoredServer } from './types.ts';
 import type { SettingsNamespace as DshSettingsNamespace } from '@deepseek-ai/dsh-settings';
+import type { ReconnectPolicy, ServerTransport, SettingsDocument, StoredReconnectPolicy, StoredServer } from './types.ts';
 export declare const MANAGER_NAMESPACE: DshSettingsNamespace;
 export declare const DEFAULT_RECONNECT: StoredReconnectPolicy;
 export declare const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60000;

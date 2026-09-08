@@ -1,0 +1,1 @@
+{"version":3,"file":"mcp-config.d.ts","sourceRoot":"","sources":["../../../src/host/mcp-config.ts"],"names":[],"mappings":"AAAA;;;GAGG;AAEH,OAAO,EAAuB,KAAK,MAAM,IAAI,eAAe,EAAE,MAAM,6BAA6B,CAAA;AACjG,OAAO,KAAK,EAAE,YAAY,EAAE,MAAM,aAAa,CAAA;AAE/C,mEAAmE;AACnE,wBAAgB,WAAW,CAAC,MAAM,EAAE,YAAY,GAAG,eAAe,CAwBjE;AAED,kEAAkE;AAClE,wBAAgB,iBAAiB,CAAC,MAAM,EAAE,YAAY,GAAG,YAAY,CAQpE"}
