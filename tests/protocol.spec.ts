@@ -24,7 +24,25 @@ describe('MCP manager protocol projections', () => {
     const next = mergeServerPatch(current, { id: 'demo', env: { TOKEN: { clear: true } } })
 
     expect(next.env).toEqual({})
-    expect(redactServer({ ...current, env: { TOKEN: 'old-value' } }, 'loaded', 0).env).toEqual({ TOKEN: { set: true } })
+    expect(redactServer({ ...current, env: { TOKEN: 'old-value' } }, 'loaded', 0).env).toEqual({ TOKEN: { set: true, sensitive: false } })
+  })
+
+  it('marks sensitive env keys in the redacted view and persists the list', () => {
+    const current = defaultServer('demo')
+    current.command = 'node'
+    const next = mergeServerPatch(current, {
+      id: 'demo',
+      env: { TOKEN: 'value', NUM: '2048' },
+      envSensitive: ['TOKEN'],
+    })
+    expect(next.envSensitive).toEqual(['TOKEN'])
+    expect(redactServer(next, 'loaded', 0).env).toEqual({
+      NUM: { set: true, sensitive: false },
+      TOKEN: { set: true, sensitive: true },
+    })
+    // patch 未提供 sensitive 列表时保持现状
+    const unchanged = mergeServerPatch(next, { id: 'demo', env: { EXTRA: 'x' } })
+    expect(unchanged.envSensitive).toEqual(['TOKEN'])
   })
 
   it('keeps secret keys as data even when they use object-prototype names', () => {

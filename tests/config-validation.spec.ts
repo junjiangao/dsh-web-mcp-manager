@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Config } from '@deepseek-ai/dsh-mcp-client'
-import { DEFAULT_RECONNECT, defaultServer, validateServerConfig } from '../src/settings.ts'
+import { DEFAULT_RECONNECT, defaultServer, validateServerConfig, validateServerId } from '../src/settings.ts'
 import { validateMcpConfig } from '../src/host/mcp-config.ts'
 
 function expectMcpConfigValidation(fn: () => unknown): void {
@@ -52,5 +52,23 @@ describe('MCP config validation delegated to dsh-mcp-client', () => {
         ...defaultServer('x'), command: 'sh', toolCallTimeoutMs,
       })).toThrow(/toolCallTimeoutMs/u)
     }
+  })
+
+  it('accepts ids whose dash is not a descending range (browser-safe pattern)', () => {
+    for (const id of ['codebase-memory', '-leading', 'a_b-c', 'mcp_1', 'X'.repeat(32)]) {
+      expect(() => validateServerId(id)).not.toThrow()
+    }
+    for (const id of ['', 'has space', '中文', 'X'.repeat(33)]) {
+      expect(() => validateServerId(id)).toThrow()
+    }
+  })
+
+  it('rejects malformed sensitive-key lists and accepts orphan markers', () => {
+    const server = { ...defaultServer('x'), command: 'sh' }
+    expect(() => validateServerConfig(server)).not.toThrow()
+    expect(() => validateServerConfig({ ...server, envSensitive: ['TOKEN'] })).not.toThrow()
+    expect(() => validateServerConfig({ ...server, envSensitive: ['TOKEN', 'TOKEN'] })).toThrow(/duplicate key/u)
+    expect(() => validateServerConfig({ ...server, envSensitive: [''] })).toThrow(/invalid envSensitive key/u)
+    expect(() => validateServerConfig({ ...server, headerSensitive: ['x'.repeat(257)] })).toThrow(/invalid headerSensitive key/u)
   })
 })

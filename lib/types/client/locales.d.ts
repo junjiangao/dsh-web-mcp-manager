@@ -29,6 +29,8 @@ export declare const zh: {
     readonly headers: "请求头";
     readonly secretKey: "键";
     readonly secretValue: "值（留空表示保留原值）";
+    readonly sensitive: "敏感值";
+    readonly secretHint: "普通值（如数字、路径）直接可见；敏感值（如 API Key）勾选“敏感值”后以密码框输入，已保存的值不会回显。";
     readonly addEntry: "添加一项";
     readonly reconnect: "重连策略";
     readonly reconnectEnabled: "启用自动重连";

@@ -45,6 +45,8 @@ const ServerSchema: z<StoredServer> = z.object({
   url: z.string().default(''),
   env: z.dict(z.string().role('secret')).default({}),
   headers: z.dict(z.string().role('secret')).default({}),
+  envSensitive: z.array(z.string()).default([]),
+  headerSensitive: z.array(z.string()).default([]),
   toolCallTimeoutMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
   reconnect: ReconnectSchema,
 })
@@ -66,6 +68,8 @@ export function defaultServer(id: string): StoredServer {
     url: '',
     env: {},
     headers: {},
+    envSensitive: [],
+    headerSensitive: [],
     toolCallTimeoutMs: DEFAULT_TOOL_CALL_TIMEOUT_MS,
     reconnect: { ...DEFAULT_RECONNECT },
   }
@@ -90,8 +94,11 @@ export function validateStoredDocument(value: SettingsDocument): void {
 }
 
 export function validateServerId(id: string): void {
-  if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) {
-    throw new TypeError('server id must match [A-Za-z0-9_-]{1,32}')
+  // The dash is escaped/leading so the character class never forms a
+  // descending range: browsers compile `pattern` attributes with the
+  // UnicodeSets (v) flag, where `[A-Za-z0-9_-]` is a SyntaxError.
+  if (!/^[-A-Za-z0-9_]{1,32}$/.test(id)) {
+    throw new TypeError('server id must match [-A-Za-z0-9_]{1,32}')
   }
 }
 
@@ -120,8 +127,22 @@ export function validateServerConfig(server: StoredServer): void {
     if (key.trim() === '') throw new Error(`server ${JSON.stringify(server.id)} contains an empty header key`)
     if (typeof value !== 'string') throw new Error(`server ${JSON.stringify(server.id)} header values must be strings`)
   }
+  validateSensitiveKeys(server.id, 'envSensitive', server.envSensitive)
+  validateSensitiveKeys(server.id, 'headerSensitive', server.headerSensitive)
   // 委托给 mcp-client 的 Config schema 校验 args/env/headers 形状与重连边界。
   validateMcpConfig(server)
+}
+
+/** 校验敏感键列表:格式、去重;不要求键必须存在于 env/headers(容忍手工编辑的孤儿标记)。 */
+function validateSensitiveKeys(serverId: string, field: 'envSensitive' | 'headerSensitive', keys: readonly string[]): void {
+  const seen = new Set<string>()
+  for (const key of keys) {
+    if (key.trim() === '' || key.length > 256) {
+      throw new Error(`server ${JSON.stringify(serverId)} contains an invalid ${field} key`)
+    }
+    if (seen.has(key)) throw new Error(`server ${JSON.stringify(serverId)} ${field} contains duplicate key ${JSON.stringify(key)}`)
+    seen.add(key)
+  }
 }
 
 export function validateReconnect(value: ReconnectPolicy): void {

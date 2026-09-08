@@ -12,6 +12,8 @@ export interface ReconnectPolicy {
 /** Secret values never cross the RPC boundary; only this state does. */
 export interface SecretState {
     readonly set: boolean;
+    /** Whether the stored value should be masked in the panel (sensitive key). */
+    readonly sensitive: boolean;
 }
 export interface ManagedServerView {
     readonly id: string;
@@ -72,6 +74,10 @@ export interface ServerPatch {
     readonly url?: string;
     readonly env?: Readonly<Record<string, SecretInput>>;
     readonly headers?: Readonly<Record<string, SecretInput>>;
+    /** Keys of `env` whose values must be masked in the panel (full list semantics). */
+    readonly envSensitive?: readonly string[];
+    /** Keys of `headers` whose values must be masked in the panel (full list semantics). */
+    readonly headerSensitive?: readonly string[];
     readonly toolCallTimeoutMs?: number;
     readonly reconnect?: Partial<ReconnectPolicy>;
 }
@@ -131,6 +137,10 @@ export interface StoredServer {
     url: string;
     env: Record<string, string>;
     headers: Record<string, string>;
+    /** Keys of `env` whose values are masked in the panel (full list, persisted). */
+    envSensitive: string[];
+    /** Keys of `headers` whose values are masked in the panel (full list, persisted). */
+    headerSensitive: string[];
     toolCallTimeoutMs: number;
     reconnect: StoredReconnectPolicy;
 }
@@ -149,6 +159,8 @@ export interface StoredServerPatch {
     readonly url?: string;
     readonly env?: Readonly<Record<string, SecretInput>>;
     readonly headers?: Readonly<Record<string, SecretInput>>;
+    readonly envSensitive?: readonly string[];
+    readonly headerSensitive?: readonly string[];
     readonly toolCallTimeoutMs?: number;
     readonly reconnect?: Partial<StoredReconnectPolicy>;
 }

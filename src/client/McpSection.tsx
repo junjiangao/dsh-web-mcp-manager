@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ManagedServerView, ManagedToolView, ReadonlyMcpEntry, SecretInput, ServerPatch, Snapshot } from '../types.ts'
+import type { ManagedServerView, ManagedToolView, ReadonlyMcpEntry, SecretInput, SecretState, ServerPatch, Snapshot } from '../types.ts'
 import { PLUGIN_IDENTITY } from '../types.ts'
 import { McpManagerRpcError, type ManagerClientApi } from './api.ts'
 import type { McpLocaleKey } from './locales.ts'
@@ -37,6 +37,8 @@ interface SecretDraft {
   key: string
   value: string
   clear: boolean
+  /** Mask the value as a password field (e.g. API keys); plain values stay visible. */
+  sensitive: boolean
 }
 
 type ViewState =
@@ -366,13 +368,16 @@ function draftPatch(draft: ServerDraft): ServerPatch {
     url: draft.url,
     env: secretPatch(draft.env),
     headers: secretPatch(draft.headers),
+    envSensitive: sensitiveKeys(draft.env),
+    headerSensitive: sensitiveKeys(draft.headers),
     toolCallTimeoutMs: Number.isSafeInteger(timeout) && timeout > 0 ? timeout : 60_000,
     reconnect: { enabled: draft.reconnectEnabled, initialDelayMs, maxDelayMs, maxAttempts },
   }
 }
 
-function secretDrafts(value?: Readonly<Record<string, { readonly set: boolean }>>): SecretDraft[] {
-  return Object.keys(value ?? {}).sort((a, b) => a.localeCompare(b)).map(key => ({ key, value: '', clear: false }))
+function secretDrafts(value?: Readonly<Record<string, SecretState>>): SecretDraft[] {
+  return Object.keys(value ?? {}).sort((a, b) => a.localeCompare(b))
+    .map(key => ({ key, value: '', clear: false, sensitive: value?.[key]?.sensitive ?? false }))
 }
 
 function secretPatch(entries: readonly SecretDraft[]): Record<string, SecretInput> {
@@ -387,6 +392,11 @@ function secretPatch(entries: readonly SecretDraft[]): Record<string, SecretInpu
     }
   }
   return result
+}
+
+function sensitiveKeys(entries: readonly SecretDraft[]): string[] {
+  const keys = entries.filter(entry => entry.sensitive).map(entry => entry.key.trim()).filter(Boolean)
+  return [...new Set(keys)]
 }
 
 function positiveIntegerOr(value: string, fallback: number): number {
@@ -542,7 +552,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
           <h3 style={formTitleStyle}>{draft.id.length > 0 && snapshot?.servers.some(server => server.id === draft.id) ? t('edit') : t('add')}</h3>
           <fieldset style={fieldsetStyle}>
             <legend style={legendStyle}>{t('basic')}</legend>
-            <Field label={t('id')}><input style={fieldInputStyle} required pattern="[A-Za-z0-9_-]{1,32}" value={draft.id} disabled={snapshot?.servers.some(server => server.id === draft.id)} onChange={event => setDraft({ ...draft, id: event.currentTarget.value })} /></Field>
+            <Field label={t('id')}><input style={fieldInputStyle} required pattern="[-A-Za-z0-9_]{1,32}" value={draft.id} disabled={snapshot?.servers.some(server => server.id === draft.id)} onChange={event => setDraft({ ...draft, id: event.currentTarget.value })} /></Field>
             <Field label={t('label')}><input style={fieldInputStyle} value={draft.label} onChange={event => setDraft({ ...draft, label: event.currentTarget.value })} /></Field>
             <Field label={t('transport')}>
               <select style={fieldInputStyle} value={draft.transport} onChange={event => setDraft({ ...draft, transport: event.currentTarget.value as ServerDraft['transport'] })}>
@@ -613,18 +623,24 @@ interface SecretFieldsProps {
 function SecretFields({ label, entries, t, onChange }: SecretFieldsProps): ReactNode {
   return <fieldset style={groupFieldsetStyle}>
     <legend style={legendStyle}>{label}</legend>
+    <p style={hintStyle}>{t('secretHint')}</p>
     {entries.map((entry, index) => <div key={`${entry.key}-${String(index)}`} style={secretRowStyle}>
       <Field label={t('secretKey')} style={secretFieldStyle}><input style={fieldInputStyle} value={entry.key} onChange={event => {
         const next = [...entries]
         next[index] = { ...entry, key: event.currentTarget.value }
         onChange(next)
       }} /></Field>
-      <Field label={t('secretValue')} style={secretFieldStyle}><input style={fieldInputStyle} type="password" value={entry.value} disabled={entry.clear} placeholder={entry.clear ? t('secretUnset') : undefined} onChange={event => {
+      <Field label={t('secretValue')} style={secretFieldStyle}><input style={fieldInputStyle} type={entry.sensitive ? 'password' : 'text'} value={entry.value} disabled={entry.clear} placeholder={entry.clear ? t('secretUnset') : undefined} onChange={event => {
         const next = [...entries]
         next[index] = { ...entry, value: event.currentTarget.value }
         onChange(next)
       }} /></Field>
       <div style={secretActionsStyle}>
+        <label style={secretClearLabelStyle}><input style={checkStyle} type="checkbox" checked={entry.sensitive} onChange={event => {
+          const next = [...entries]
+          next[index] = { ...entry, sensitive: event.currentTarget.checked }
+          onChange(next)
+        }} /> {t('sensitive')}</label>
         <label style={secretClearLabelStyle}><input style={checkStyle} type="checkbox" checked={entry.clear} onChange={event => {
           const next = [...entries]
           next[index] = { ...entry, clear: event.currentTarget.checked }
@@ -633,7 +649,7 @@ function SecretFields({ label, entries, t, onChange }: SecretFieldsProps): React
         <button type="button" style={buttonDangerStyle} onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</button>
       </div>
     </div>)}
-    <button type="button" style={buttonSecondaryStyle} onClick={() => onChange([...entries, { key: '', value: '', clear: false }])}>{t('addEntry')}</button>
+    <button type="button" style={buttonSecondaryStyle} onClick={() => onChange([...entries, { key: '', value: '', clear: false, sensitive: false }])}>{t('addEntry')}</button>
   </fieldset>
 }
 

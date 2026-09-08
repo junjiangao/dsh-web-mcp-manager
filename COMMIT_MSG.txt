@@ -1,0 +1,13 @@
+fix: browser-safe id pattern and per-entry sensitive env values
+
+- pattern/validateServerId: place dash first in the character class so the
+  UnicodeSets (v) compiler in browsers stops rejecting the form as an
+  invalid descending range, which blocked saving any server.
+- env/headers rows: add a per-entry sensitive toggle; plain values use a
+  visible text input (numbers, paths shown as-is) while sensitive values
+  keep the password field. The marking is persisted as envSensitive /
+  headerSensitive (full-list semantics, orphan keys tolerated) and echoed
+  in redacted snapshots so edits restore the input kind.
+- stored values still never cross the RPC boundary.
+- tests: id pattern cases, sensitive-list validation and merge/redact
+  projections; rebuild lib artifacts.

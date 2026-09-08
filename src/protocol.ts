@@ -1,7 +1,7 @@
 /** Runtime validation and redacted projections for the manager RPC. */
 
 import type {
-  ManagedServerView, ManagedToolView, ReconnectPolicy, SecretInput, ServerPatch, StoredServer,
+  ManagedServerView, ManagedToolView, ReconnectPolicy, SecretInput, SecretState, ServerPatch, StoredServer,
 } from './types.ts'
 import { defaultServer, DEFAULT_RECONNECT, DEFAULT_TOOL_CALL_TIMEOUT_MS, transportOf, validateReconnect, validateServerConfig, validateServerId } from './settings.ts'
 
@@ -144,11 +144,26 @@ function parseServerPatch(value: unknown): ServerPatch {
     ...record.url === undefined ? {} : { url: asString(record.url, 'server.url') },
     ...record.env === undefined ? {} : { env: parseSecretMap(record.env, 'server.env') },
     ...record.headers === undefined ? {} : { headers: parseSecretMap(record.headers, 'server.headers') },
+    ...record.envSensitive === undefined ? {} : { envSensitive: parseSensitiveKeys(record.envSensitive, 'server.envSensitive') },
+    ...record.headerSensitive === undefined ? {} : { headerSensitive: parseSensitiveKeys(record.headerSensitive, 'server.headerSensitive') },
     ...record.toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs: asPositiveInteger(record.toolCallTimeoutMs, 'server.toolCallTimeoutMs') },
     ...record.reconnect === undefined ? {} : { reconnect: parseReconnect(record.reconnect) },
   }
   if (result.label !== undefined && result.label.length > MAX_LABEL_LENGTH) throw new TypeError(`server.label must be at most ${MAX_LABEL_LENGTH} characters`)
   return result
+}
+
+function parseSensitiveKeys(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string')) {
+    throw new TypeError(`${field} must be an array of strings`)
+  }
+  const seen = new Set<string>()
+  for (const key of value as string[]) {
+    if (key.trim() === '' || key.length > 256) throw new TypeError(`${field} contains an invalid key`)
+    if (seen.has(key)) throw new TypeError(`${field} contains duplicate key ${JSON.stringify(key)}`)
+    seen.add(key)
+  }
+  return [...value as string[]]
 }
 
 function asPositiveInteger(value: unknown, field: string): number {
@@ -183,10 +198,10 @@ function setOwn<T>(record: Record<string, T>, key: string, value: T): void {
   })
 }
 
-export function mergeServerPatch(current: StoredServer | undefined, patch: ServerPatch): StoredServer {
-  const base = current === undefined ? defaultServer(patch.id) : cloneServer(current)
+export function mergeServerPatch(base: StoredServer | undefined, patch: ServerPatch): StoredServer {
+  const current = base === undefined ? defaultServer(patch.id) : cloneServer(base)
   const next: StoredServer = {
-    ...base,
+    ...current,
     ...patch.label === undefined ? {} : { label: patch.label },
     ...patch.enabled === undefined ? {} : { enabled: patch.enabled },
     ...patch.transport === undefined ? {} : { transport: patch.transport },
@@ -195,9 +210,11 @@ export function mergeServerPatch(current: StoredServer | undefined, patch: Serve
     ...patch.cwd === undefined ? {} : { cwd: patch.cwd },
     ...patch.url === undefined ? {} : { url: patch.url },
     ...patch.toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs: patch.toolCallTimeoutMs },
-    env: mergeSecretMap(base.env, patch.env),
-    headers: mergeSecretMap(base.headers, patch.headers),
-    reconnect: { ...base.reconnect, ...patch.reconnect },
+    env: mergeSecretMap(current.env, patch.env),
+    headers: mergeSecretMap(current.headers, patch.headers),
+    envSensitive: mergeSensitiveKeys(current.envSensitive, patch.envSensitive),
+    headerSensitive: mergeSensitiveKeys(current.headerSensitive, patch.headerSensitive),
+    reconnect: { ...current.reconnect, ...patch.reconnect },
   }
   validateServerConfig(next)
   return next
@@ -209,8 +226,15 @@ export function cloneServer(server: StoredServer): StoredServer {
     args: [...server.args],
     env: { ...server.env },
     headers: { ...server.headers },
+    envSensitive: [...server.envSensitive],
+    headerSensitive: [...server.headerSensitive],
     reconnect: { ...server.reconnect },
   }
+}
+
+/** 敏感列表快照语义:patch 存在则整体替换,不存在则保持现状。 */
+function mergeSensitiveKeys(current: readonly string[], patch: readonly string[] | undefined): string[] {
+  return patch === undefined ? [...current] : [...patch]
 }
 
 export function redactServer(
@@ -228,14 +252,19 @@ export function redactServer(
     args: [...server.args],
     cwd: server.cwd,
     url: server.url,
-    env: Object.fromEntries(Object.keys(server.env).sort().map(key => [key, { set: true }])),
-    headers: Object.fromEntries(Object.keys(server.headers).sort().map(key => [key, { set: true }])),
+    env: redactSecrets(server.env, server.envSensitive),
+    headers: redactSecrets(server.headers, server.headerSensitive),
     toolCallTimeoutMs: server.toolCallTimeoutMs || DEFAULT_TOOL_CALL_TIMEOUT_MS,
     reconnect: { ...server.reconnect },
     status,
     ...error === undefined ? {} : { error },
     toolCount,
   }
+}
+
+function redactSecrets(values: Record<string, string>, sensitiveKeys: readonly string[]): Record<string, SecretState> {
+  const sensitive = new Set(sensitiveKeys)
+  return Object.fromEntries(Object.keys(values).sort().map(key => [key, { set: true, sensitive: sensitive.has(key) }]))
 }
 
 export function serverIdFromToolName(name: string, serverIds?: Iterable<string>): string | undefined {

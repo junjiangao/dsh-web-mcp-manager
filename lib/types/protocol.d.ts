@@ -32,7 +32,7 @@ export declare function parseToolRequest(value: unknown): {
     expectedRevision: number;
 };
 export declare function mergeSecretMap(current: Record<string, string>, patch: Readonly<Record<string, SecretInput>> | undefined): Record<string, string>;
-export declare function mergeServerPatch(current: StoredServer | undefined, patch: ServerPatch): StoredServer;
+export declare function mergeServerPatch(base: StoredServer | undefined, patch: ServerPatch): StoredServer;
 export declare function cloneServer(server: StoredServer): StoredServer;
 export declare function redactServer(server: StoredServer, status: ManagedServerView['status'], toolCount: number, error?: string): ManagedServerView;
 export declare function serverIdFromToolName(name: string, serverIds?: Iterable<string>): string | undefined;
