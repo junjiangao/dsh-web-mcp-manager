@@ -1,5 +1,5 @@
 {
-  "name": "dsh-web-mcp-manager",
+  "name": "@junjiangao/dsh-web-mcp-manager",
   "version": "0.1.0",
   "description": "Web settings panel and Host lifecycle manager for user-owned MCP servers in DeepSeek Harness",
   "private": true,
@@ -52,6 +52,7 @@
     "lib/types/**/*.js",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
+    "registry.json",
     "README.md",
     "README.zh.md",
     "LICENSE"

@@ -12,7 +12,7 @@ const builtins = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]
  */
 export default defineConfig([
   {
-    name: 'dsh-web-mcp-manager',
+    name: '@junjiangao/dsh-web-mcp-manager',
     entry: { index: 'lib/types/index.js' },
     outDir: 'lib',
     format: ['esm'],
@@ -30,7 +30,7 @@ export default defineConfig([
     },
   },
   {
-    name: 'dsh-web-mcp-manager/client',
+    name: '@junjiangao/dsh-web-mcp-manager/client',
     entry: { client: 'lib/types/client/index.js' },
     outDir: 'lib',
     format: ['cjs'],
@@ -47,7 +47,7 @@ export default defineConfig([
     },
     outputOptions: {
       entryFileNames: 'client.js',
-      banner: 'window.__ModuleLoader__.load({ id: "dsh-web-mcp-manager", factory: (require) => { var module = { exports: {} }; var exports = module.exports;',
+      banner: 'window.__ModuleLoader__.load({ id: "@junjiangao/dsh-web-mcp-manager", factory: (require) => { var module = { exports: {} }; var exports = module.exports;',
       footer: 'return module.exports; } });',
     },
   },

@@ -2,4 +2,4 @@
 # after building the package; the default profile is intentionally untouched.
 - insert:
     - id: web-mcp-manager
-      name: 'dsh-web-mcp-manager'
+      name: '@junjiangao/dsh-web-mcp-manager'

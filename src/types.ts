@@ -194,3 +194,10 @@ export function isRpcResult<T>(value: unknown): value is RpcResult<T> {
   const error = record.error as Record<string, unknown>
   return typeof error.code === 'string' && typeof error.message === 'string'
 }
+
+/** 插件的社区注册身份(GitHub owner/repo)。 */
+export const PLUGIN_IDENTITY = 'junjiangao/dsh-web-mcp-manager' as const
+/** 插件安装后的 npm 包名 / loader 模块名(bundle 层与 patch 条目 name)。 */
+export const PLUGIN_MODULE_NAME = '@junjiangao/dsh-web-mcp-manager' as const
+/** 旧包名,仅用于已安装 profile 的过渡期识别(只读条目过滤),勿在生产路径使用。 */
+export const LEGACY_PLUGIN_MODULE_NAME = 'dsh-web-mcp-manager' as const

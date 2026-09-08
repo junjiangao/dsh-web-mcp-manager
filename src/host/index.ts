@@ -6,7 +6,7 @@ import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-tools'
 import { McpManagerController } from './controller.ts'
 
-export const name = 'web-mcp-manager'
+export const name = '@junjiangao/dsh-web-mcp-manager'
 export const inject = ['settings', 'connection', 'tools']
 
 /** Start the controller on the Host Cordis fiber. */

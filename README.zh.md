@@ -15,6 +15,17 @@ dsh web
 
 如果 Web profile 已经在运行，安装完成后重启它；Bundle 成员是在下一次启动时挂载的。
 
+安装后插件以其 npm 作用域包名 `@junjiangao/dsh-web-mcp-manager` 挂载。社区注册身份 `junjiangao/dsh-web-mcp-manager` 由仓库根目录的 `registry.json` 声明。
+
+从旧版本（包名 `dsh-web-mcp-manager`）升级时，需先移除旧安装再重新添加：
+
+```bash
+dsh plugin --profile web remove dsh-web-mcp-manager
+dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager
+```
+
+同一 profile 不要同时保留新旧两个安装。
+
 也可以固定分支或标签：
 
 ```bash

@@ -15,6 +15,17 @@ dsh web
 
 Restart an already-running Web profile after installation. Bundle membership is mounted on the next profile start.
 
+The plugin is mounted under its scoped npm package name `@junjiangao/dsh-web-mcp-manager`. The community registration identity `junjiangao/dsh-web-mcp-manager` is declared in the repository-root `registry.json`.
+
+To upgrade from an older version installed under the unscoped package name `dsh-web-mcp-manager`, remove the old install first and then add the new one:
+
+```bash
+dsh plugin --profile web remove dsh-web-mcp-manager
+dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager
+```
+
+Do not keep both the old and the new install in the same profile.
+
 You can pin a branch or tag as well:
 
 ```bash

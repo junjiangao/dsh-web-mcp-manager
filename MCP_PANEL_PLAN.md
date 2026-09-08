@@ -4,6 +4,8 @@
 
 插件实现已经开始并以本仓库源码和已提交的 `lib/` 产物为交付物。插件不发布到 npm；用户通过 GitHub spec 安装，安装阶段不执行额外编译。实现仍以本文的第一版边界为准，未完成的运行时集成测试会在交付说明中单独列出。
 
+改名记录：插件包名已由 `dsh-web-mcp-manager` 改为 npm 作用域名 `@junjiangao/dsh-web-mcp-manager`，社区注册身份 `junjiangao/dsh-web-mcp-manager` 由仓库根 `registry.json` 声明；settings 命名空间 `web-mcp-manager` 与 loader 树 id `web-mcp-manager` 保持不变。已安装旧包名的 profile 需先 `dsh plugin --profile <profile> remove dsh-web-mcp-manager` 再重新 add，同一 profile 不要同时保留新旧两个安装。
+
 推荐安装方式：
 
 ```bash
@@ -42,7 +44,7 @@ Bundle 变化需要重启已经运行的 Web profile。源码变更后由维护�
 
 ## 3. 插件功能与界面
 
-独立包名为 `dsh-web-mcp-manager`，代码放在本项目，通过 Web profile 安装，同时提供 Host 和浏览器入口，不修改宿主源码。
+独立包名为 `@junjiangao/dsh-web-mcp-manager`（GitHub 身份 `junjiangao/dsh-web-mcp-manager`，由仓库根 `registry.json` 声明），代码放在本项目，通过 Web profile 安装，同时提供 Host 和浏览器入口，不修改宿主源码。
 
 - 在“设置 → MCP”提供服务列表、配置表单和工具列表，支持搜索、中英文、宿主主题和键盘操作。
 - 面板自管服务支持新增、编辑、删除、启用、停用及重新加载，支持 `stdio` 和 `streamable-http`。
