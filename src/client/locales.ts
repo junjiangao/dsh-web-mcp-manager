@@ -52,6 +52,10 @@ export const zh = {
   sourceLoader: 'Loader',
   sourcePreset: '预设',
   conditional: '条件启用',
+  basic: '基本配置',
+  advanced: '高级选项',
+  status: '状态',
+  params: '参数',
 } as const
 
 export type McpLocaleKey = keyof typeof zh
@@ -108,4 +112,8 @@ export const en: Record<McpLocaleKey, string> = {
   sourceLoader: 'Loader',
   sourcePreset: 'Preset',
   conditional: 'Conditional',
+  basic: 'Basic',
+  advanced: 'Advanced',
+  status: 'Status',
+  params: 'Parameters',
 }
