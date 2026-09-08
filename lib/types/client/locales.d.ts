@@ -21,7 +21,9 @@ export declare const zh: {
     readonly label: "名称";
     readonly transport: "传输方式";
     readonly command: "命令";
-    readonly args: "参数（每行一个）";
+    readonly args: "启动参数";
+    readonly argument: "参数";
+    readonly argsHint: "逐项编辑，原样保存（不做去空格或过滤）。";
     readonly cwd: "工作目录";
     readonly url: "URL";
     readonly timeout: "调用超时（毫秒）";
@@ -49,6 +51,10 @@ export declare const zh: {
     readonly error: "操作失败";
     readonly refresh: "刷新";
     readonly conflict: "设置已被其他页面修改，请刷新后重试。";
+    readonly rebase: "重新加载最新配置（将丢弃草稿修改）";
+    readonly pollFailed: "状态刷新失败，正在自动重试。";
+    readonly duplicateKey: "存在重复的键名";
+    readonly dismiss: "关闭";
     readonly empty: "暂无匹配项";
     readonly sourceLoader: "Loader";
     readonly sourcePreset: "预设";

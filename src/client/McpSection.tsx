@@ -1,11 +1,12 @@
 /** Settings → MCP page. It intentionally owns no durable state. */
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ManagedServerView, ManagedToolView, ReadonlyMcpEntry, SecretInput, SecretState, ServerPatch, Snapshot } from '../types.ts'
+import type { ManagedServerView, ManagedToolView, ReadonlyMcpEntry, SecretInput, Snapshot } from '../types.ts'
 import { PLUGIN_IDENTITY } from '../types.ts'
 import { McpManagerRpcError, type ManagerClientApi } from './api.ts'
 import type { McpLocaleKey } from './locales.ts'
+import { SERVER_ID_PATTERN, draftFromServer, draftPatch, duplicateDraftKeys, newSecretDraft, type SecretDraft, type ServerDraft } from './draft.ts'
 
 export interface McpSectionInjected {
   readonly api: ManagerClientApi
@@ -15,31 +16,6 @@ export type McpSectionProps =
   PropsRuntime<'settings.section'>
   & PropsLocale<'settings.mcpManager'>
   & InjectFace<McpSectionInjected>
-
-interface ServerDraft {
-  id: string
-  label: string
-  transport: 'stdio' | 'streamable-http'
-  command: string
-  args: string
-  cwd: string
-  url: string
-  timeout: string
-  env: SecretDraft[]
-  headers: SecretDraft[]
-  reconnectEnabled: boolean
-  initialDelayMs: string
-  maxDelayMs: string
-  maxAttempts: string
-}
-
-interface SecretDraft {
-  key: string
-  value: string
-  clear: boolean
-  /** Mask the value as a password field (e.g. API keys); plain values stay visible. */
-  sensitive: boolean
-}
 
 type ViewState =
   | { status: 'loading' }
@@ -334,86 +310,36 @@ const readonlyStatusStyle: React.CSSProperties = { color: COLORS.textCaption, fo
 
 /* ------------------------------------------------------------------------------------------- */
 
-function draftFromServer(server?: ManagedServerView): ServerDraft {
-  return {
-    id: server?.id ?? '',
-    label: server?.label ?? '',
-    transport: server?.transport ?? 'stdio',
-    command: server?.command ?? '',
-    args: server?.args.join('\n') ?? '',
-    cwd: server?.cwd ?? '',
-    url: server?.url ?? '',
-    timeout: String(server?.toolCallTimeoutMs ?? 60_000),
-    env: secretDrafts(server?.env),
-    headers: secretDrafts(server?.headers),
-    reconnectEnabled: server?.reconnect.enabled ?? true,
-    initialDelayMs: String(server?.reconnect.initialDelayMs ?? 500),
-    maxDelayMs: String(server?.reconnect.maxDelayMs ?? 30_000),
-    maxAttempts: String(server?.reconnect.maxAttempts ?? 10),
-  }
-}
-
-function draftPatch(draft: ServerDraft): ServerPatch {
-  const timeout = Number(draft.timeout)
-  const initialDelayMs = positiveIntegerOr(draft.initialDelayMs, 500)
-  const maxDelayMs = Math.max(initialDelayMs, positiveIntegerOr(draft.maxDelayMs, 30_000))
-  const maxAttempts = positiveIntegerOr(draft.maxAttempts, 10)
-  return {
-    id: draft.id.trim(),
-    label: draft.label,
-    transport: draft.transport,
-    command: draft.command,
-    args: draft.args.split(/\r?\n/u).map(value => value.trim()).filter(Boolean),
-    cwd: draft.cwd,
-    url: draft.url,
-    env: secretPatch(draft.env),
-    headers: secretPatch(draft.headers),
-    envSensitive: sensitiveKeys(draft.env),
-    headerSensitive: sensitiveKeys(draft.headers),
-    toolCallTimeoutMs: Number.isSafeInteger(timeout) && timeout > 0 ? timeout : 60_000,
-    reconnect: { enabled: draft.reconnectEnabled, initialDelayMs, maxDelayMs, maxAttempts },
-  }
-}
-
-function secretDrafts(value?: Readonly<Record<string, SecretState>>): SecretDraft[] {
-  return Object.keys(value ?? {}).sort((a, b) => a.localeCompare(b))
-    .map(key => ({ key, value: '', clear: false, sensitive: value?.[key]?.sensitive ?? false }))
-}
-
-function secretPatch(entries: readonly SecretDraft[]): Record<string, SecretInput> {
-  const result: Record<string, SecretInput> = {}
-  for (const entry of entries) {
-    const key = entry.key.trim()
-    if (key.length === 0) continue
-    if (entry.clear) {
-      result[key] = { clear: true }
-    } else if (entry.value.length > 0) {
-      result[key] = entry.value
-    }
-  }
-  return result
-}
-
-function sensitiveKeys(entries: readonly SecretDraft[]): string[] {
-  const keys = entries.filter(entry => entry.sensitive).map(entry => entry.key.trim()).filter(Boolean)
-  return [...new Set(keys)]
-}
-
-function positiveIntegerOr(value: string, fallback: number): number {
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
-}
-
-function useVisiblePolling(api: ManagerClientApi, onSnapshot: (snapshot: Snapshot) => void, onError: (error: unknown) => void): void {
-  const load = useCallback((signal?: AbortSignal) => {
-    void api.snapshot({}, signal).then(onSnapshot, onError)
-  }, [api, onError, onSnapshot])
+/**
+ * Poll the snapshot while the page is visible.
+ *
+ * Guarantees: at most one request in flight per tick (slow responses are not
+ * overlapped), and every response is tagged with the caller's monotonic `seq`
+ * so a late poll response can never overwrite a newer snapshot produced by a
+ * user operation or a newer poll.
+ */
+function useVisiblePolling(
+  api: ManagerClientApi,
+  onSnapshot: (snapshot: Snapshot, seq: number) => void,
+  onError: (error: unknown, seq: number) => void,
+  nextSeq: () => number,
+): void {
   useEffect(() => {
     const controller = new AbortController()
     let timer: ReturnType<typeof setInterval> | undefined
+    let inFlight = false
+    const load = (): void => {
+      if (document.visibilityState !== 'visible' || inFlight) return
+      inFlight = true
+      const seq = nextSeq()
+      void api.snapshot({}, controller.signal).then(
+        snapshot => onSnapshot(snapshot, seq),
+        error => onError(error, seq),
+      ).finally(() => { inFlight = false })
+    }
     const start = (): void => {
       if (document.visibilityState !== 'visible' || timer !== undefined) return
-      timer = setInterval(() => { load(controller.signal) }, 2_000)
+      timer = setInterval(() => { load() }, 2_000)
     }
     const stop = (): void => {
       if (timer === undefined) return
@@ -423,11 +349,11 @@ function useVisiblePolling(api: ManagerClientApi, onSnapshot: (snapshot: Snapsho
     const visibility = (): void => {
       stop()
       if (document.visibilityState === 'visible') {
-        load(controller.signal)
+        load()
         start()
       }
     }
-    load(controller.signal)
+    load()
     start()
     document.addEventListener('visibilitychange', visibility)
     return () => {
@@ -435,7 +361,7 @@ function useVisiblePolling(api: ManagerClientApi, onSnapshot: (snapshot: Snapsho
       stop()
       document.removeEventListener('visibilitychange', visibility)
     }
-  }, [load])
+  }, [api, onError, onSnapshot, nextSeq])
 }
 
 export function McpSection({ api, t }: McpSectionProps): ReactNode {
@@ -444,6 +370,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
   const [draft, setDraft] = useState<ServerDraft | undefined>()
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | undefined>()
+  const [pollFailed, setPollFailed] = useState(false)
 
   // Scoped focus ring for keyboard navigation; injected once per document.
   useEffect(() => {
@@ -454,15 +381,39 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
     document.head.append(style)
   }, [])
 
-  const accept = useCallback((snapshot: Snapshot) => { setState({ status: 'ready', snapshot }); setMessage(undefined) }, [])
-  const reject = useCallback((error: unknown) => {
+  // Monotonic response sequence shared by polling, manual refresh, and user
+  // operations. A response whose seq is no longer current is discarded.
+  const seqRef = useRef(0)
+  const nextSeq = useCallback((): number => {
+    seqRef.current += 1
+    return seqRef.current
+  }, [])
+
+  const accept = useCallback((snapshot: Snapshot, seq: number): void => {
+    if (seq !== seqRef.current) return
+    setState({ status: 'ready', snapshot })
+    setPollFailed(false)
+  }, [])
+
+  /** Polling failures never touch the user-operation message. */
+  const rejectPoll = useCallback((error: unknown, seq: number): void => {
+    if (seq !== seqRef.current) return
+    setPollFailed(true)
+    setState(previous => previous.status === 'ready' ? previous : {
+      status: 'error',
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }, [])
+
+  /** User-operation failures set the action message; kept until the next operation. */
+  const rejectAction = useCallback((error: unknown): void => {
     const message = error instanceof McpManagerRpcError && error.code === 'conflict'
       ? t('conflict')
       : error instanceof Error ? error.message : String(error)
-    setState(previous => previous.status === 'ready' ? previous : { status: 'error', message })
     setMessage(message)
   }, [t])
-  useVisiblePolling(api, accept, reject)
+
+  useVisiblePolling(api, accept, rejectPoll, nextSeq)
 
   const snapshot = state.status === 'ready' ? state.snapshot : undefined
   const normalizedQuery = query.trim().toLocaleLowerCase()
@@ -478,12 +429,14 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
 
   const run = async (operation: () => Promise<Snapshot>): Promise<Snapshot | undefined> => {
     setBusy(true)
+    setMessage(undefined)
     try {
+      const seq = nextSeq()
       const next = await operation()
-      accept(next)
+      accept(next, seq)
       return next
     } catch (error) {
-      reject(error)
+      rejectAction(error)
       return undefined
     }
     finally { setBusy(false) }
@@ -492,9 +445,22 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
   const save = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
     if (snapshot === undefined || draft === undefined) return
+    const duplicates = [...duplicateDraftKeys(draft.env), ...duplicateDraftKeys(draft.headers)]
+    if (duplicates.length > 0) {
+      setMessage(`${t('duplicateKey')}: ${[...new Set(duplicates)].join(', ')}`)
+      return
+    }
     const patch = draftPatch(draft)
-    const next = await run(() => api.upsertServer({ server: patch, expectedRevision: snapshot.revision }))
+    const next = await run(() => api.upsertServer({ server: patch, expectedRevision: draft.baseRevision }))
     if (next !== undefined) setDraft(undefined)
+  }
+
+  /** Re-open the editor from the latest server view after a conflict (drops draft edits). */
+  const rebase = (): void => {
+    if (snapshot === undefined || draft === undefined) return
+    const current = snapshot.servers.find(server => server.id === draft.id)
+    setDraft(current === undefined ? undefined : draftFromServer(current, snapshot.revision))
+    setMessage(undefined)
   }
 
   const toggleServer = (server: ManagedServerView): void => {
@@ -516,7 +482,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
       <header style={headerStyle}>
         <div style={headerRowStyle}>
           <h2 style={titleStyle}>{t('title')}</h2>
-          <button type="button" style={buttonPrimaryStyle} onClick={() => setDraft(draftFromServer())} disabled={busy || snapshot?.writable === false}>{t('add')}</button>
+          <button type="button" style={buttonPrimaryStyle} onClick={() => setDraft(draftFromServer(undefined, snapshot?.revision ?? 0))} disabled={busy || snapshot?.writable === false}>{t('add')}</button>
           <button type="button" style={buttonSecondaryStyle} onClick={() => { if (snapshot !== undefined) void run(() => api.snapshot({})) }} disabled={busy}>{t('refresh')}</button>
         </div>
         <div style={subtitleRowStyle}><span style={identityChipStyle}>{PLUGIN_IDENTITY}</span></div>
@@ -525,7 +491,14 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
         <span style={fieldLabelStyle}>{t('search')}</span>
         <input type="search" style={searchInputStyle} value={query} onChange={event => setQuery(event.currentTarget.value)} placeholder={t('search')} />
       </label>
-      {message !== undefined ? <p role={isConflictMessage ? 'status' : 'alert'} style={isConflictMessage ? noticeBoxStyle : errorBoxStyle}>{message}</p> : null}
+      {message !== undefined ? <p role={isConflictMessage ? 'status' : 'alert'} style={isConflictMessage ? noticeBoxStyle : errorBoxStyle}>
+        {message}
+        {isConflictMessage && draft !== undefined
+          ? <button type="button" style={{ ...buttonSecondaryStyle, marginInlineStart: 8 }} onClick={rebase}>{t('rebase')}</button>
+          : null}
+        {!isConflictMessage ? <button type="button" style={{ ...buttonToolBarStyle, marginInlineStart: 8, padding: '2px 8px' }} onClick={() => setMessage(undefined)} aria-label={t('dismiss')}>✕</button> : null}
+      </p> : null}
+      {pollFailed && state.status === 'ready' ? <p role="status" style={noticeBoxStyle}>{t('pollFailed')}</p> : null}
       {state.status === 'loading' ? <p role="status" style={statusTextStyle}>{t('loading')}</p> : null}
       {state.status === 'error' ? <p role="alert" style={errorBoxStyle}>{state.message}</p> : null}
       {snapshot !== undefined && servers.length === 0 ? <p style={statusTextStyle}>{snapshot.servers.length === 0 ? t('noServers') : t('empty')}</p> : null}
@@ -537,7 +510,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
           t={t}
           busy={busy}
           writable={snapshot?.writable ?? false}
-          onEdit={() => setDraft(draftFromServer(server))}
+          onEdit={() => setDraft(draftFromServer(server, snapshot?.revision ?? 0))}
           onToggle={() => { toggleServer(server) }}
           onReload={() => { reload(server) }}
           onRemove={() => { remove(server) }}
@@ -552,7 +525,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
           <h3 style={formTitleStyle}>{draft.id.length > 0 && snapshot?.servers.some(server => server.id === draft.id) ? t('edit') : t('add')}</h3>
           <fieldset style={fieldsetStyle}>
             <legend style={legendStyle}>{t('basic')}</legend>
-            <Field label={t('id')}><input style={fieldInputStyle} required pattern="[-A-Za-z0-9_]{1,32}" value={draft.id} disabled={snapshot?.servers.some(server => server.id === draft.id)} onChange={event => setDraft({ ...draft, id: event.currentTarget.value })} /></Field>
+            <Field label={t('id')}><input style={fieldInputStyle} required pattern={SERVER_ID_PATTERN} value={draft.id} disabled={snapshot?.servers.some(server => server.id === draft.id)} onChange={event => setDraft({ ...draft, id: event.currentTarget.value })} /></Field>
             <Field label={t('label')}><input style={fieldInputStyle} value={draft.label} onChange={event => setDraft({ ...draft, label: event.currentTarget.value })} /></Field>
             <Field label={t('transport')}>
               <select style={fieldInputStyle} value={draft.transport} onChange={event => setDraft({ ...draft, transport: event.currentTarget.value as ServerDraft['transport'] })}>
@@ -562,7 +535,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
             </Field>
             {draft.transport === 'stdio' ? <>
               <Field label={t('command')}><textarea style={textareaStyle} rows={2} required value={draft.command} onChange={event => setDraft({ ...draft, command: event.currentTarget.value })} /></Field>
-              <Field label={t('args')}><textarea style={textareaStyle} rows={3} value={draft.args} onChange={event => setDraft({ ...draft, args: event.currentTarget.value })} /></Field>
+              <ArgsFields entries={draft.args} t={t} onChange={args => setDraft({ ...draft, args })} />
               <Field label={t('cwd')}><input style={fieldInputStyle} value={draft.cwd} onChange={event => setDraft({ ...draft, cwd: event.currentTarget.value })} /></Field>
               <SecretFields label={t('environment')} entries={draft.env} t={t} onChange={env => setDraft({ ...draft, env })} />
             </> : <>
@@ -624,7 +597,7 @@ function SecretFields({ label, entries, t, onChange }: SecretFieldsProps): React
   return <fieldset style={groupFieldsetStyle}>
     <legend style={legendStyle}>{label}</legend>
     <p style={hintStyle}>{t('secretHint')}</p>
-    {entries.map((entry, index) => <div key={`${entry.key}-${String(index)}`} style={secretRowStyle}>
+    {entries.map((entry, index) => <div key={entry.uid} style={secretRowStyle}>
       <Field label={t('secretKey')} style={secretFieldStyle}><input style={fieldInputStyle} value={entry.key} onChange={event => {
         const next = [...entries]
         next[index] = { ...entry, key: event.currentTarget.value }
@@ -649,7 +622,28 @@ function SecretFields({ label, entries, t, onChange }: SecretFieldsProps): React
         <button type="button" style={buttonDangerStyle} onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</button>
       </div>
     </div>)}
-    <button type="button" style={buttonSecondaryStyle} onClick={() => onChange([...entries, { key: '', value: '', clear: false, sensitive: false }])}>{t('addEntry')}</button>
+    <button type="button" style={buttonSecondaryStyle} onClick={() => onChange([...entries, newSecretDraft()])}>{t('addEntry')}</button>
+  </fieldset>
+}
+
+/** Lossless per-row argument editor: values are saved verbatim (no trim/filter). */
+function ArgsFields({ entries, t, onChange }: { entries: readonly string[]; t: McpSectionProps['t']; onChange: (entries: string[]) => void }): ReactNode {
+  return <fieldset style={groupFieldsetStyle}>
+    <legend style={legendStyle}>{t('args')}</legend>
+    <p style={hintStyle}>{t('argsHint')}</p>
+    {entries.map((value, index) => <div key={index} style={secretRowStyle}>
+      <Field label={`${t('argument')} ${index + 1}`} style={secretFieldStyle}>
+        <input style={fieldInputStyle} value={value} onChange={event => {
+          const next = [...entries]
+          next[index] = event.currentTarget.value
+          onChange(next)
+        }} />
+      </Field>
+      <div style={secretActionsStyle}>
+        <button type="button" style={buttonDangerStyle} onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</button>
+      </div>
+    </div>)}
+    <button type="button" style={buttonSecondaryStyle} onClick={() => onChange([...entries, ''])}>{t('addEntry')}</button>
   </fieldset>
 }
 

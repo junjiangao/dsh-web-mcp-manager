@@ -23,6 +23,7 @@ import {
 } from '../types.ts'
 import { MANAGER_NAMESPACE, ManagerSettingsSchema, defaultDocument, validateStoredDocument } from '../settings.ts'
 import { toMcpConfig } from './mcp-config.ts'
+import { PerKeyQueue } from './keyed-queue.ts'
 import {
   isRecord,
   mergeServerPatch,
@@ -84,7 +85,7 @@ export class McpManagerController {
   private rpcDispose: (() => Promise<void>) | undefined
   private guardDispose: (() => void) | undefined
   private mutationTail: Promise<void> = Promise.resolve()
-  private lifecycleTail: Promise<void> = Promise.resolve()
+  private readonly lifecycleQueues = new PerKeyQueue()
   private suppressRestrictionEvents = false
   private disposed = false
 
@@ -139,7 +140,7 @@ export class McpManagerController {
     this.disposed = true
     this.settingsWatchDispose?.()
     this.settingsWatchDispose = undefined
-    await this.lifecycleTail.catch(() => {})
+    await this.lifecycleQueues.drain()
     await this.mutationTail.catch(() => {})
     for (const runtime of this.runtimes.values()) await this.disposeRuntime(runtime)
     this.runtimes.clear()
@@ -205,7 +206,8 @@ export class McpManagerController {
         disabledTools: { ...current.disabledTools },
       }
       await this.write(next, request.expectedRevision)
-      await this.reconcileServer(nextServer.id)
+      // 不等待生命周期,状态由轮询呈现
+      void this.reconcileServer(nextServer.id)
       return this.snapshot({})
     })
   }
@@ -221,7 +223,8 @@ export class McpManagerController {
       const disabledTools = { ...current.disabledTools }
       Reflect.deleteProperty(disabledTools, request.id)
       await this.write({ servers, disabledTools }, request.expectedRevision as number)
-      await this.reconcileServer(request.id)
+      // 不等待生命周期,状态由轮询呈现
+      void this.reconcileServer(request.id)
       return this.snapshot({})
     })
   }
@@ -237,7 +240,8 @@ export class McpManagerController {
         servers: { ...current.servers, [request.id]: nextServer },
         disabledTools: { ...current.disabledTools },
       }, request.expectedRevision)
-      await this.reconcileServer(request.id)
+      // 不等待生命周期,状态由轮询呈现
+      void this.reconcileServer(request.id)
       return this.snapshot({})
     })
   }
@@ -299,10 +303,9 @@ export class McpManagerController {
     this.refreshRestrictions()
   }
 
-  /** Serialize one server's lifecycle operations, including reload/dispose. */
+  /** Serialize one server's lifecycle operations, including reload/dispose, per server id. */
   private reconcileServer(id: string, force = false): Promise<void> {
-    const previous = this.lifecycleTail
-    const task = previous.then(async () => {
+    return this.lifecycleQueues.enqueue(id, async () => {
       if (this.disposed) return
       const config = this.document().servers[id]
       let runtime = this.runtimes.get(id)
@@ -324,28 +327,32 @@ export class McpManagerController {
       runtime.status = 'loading'
       runtime.error = undefined
       runtime.fingerprint = fingerprint
+      let fiber: ManagedFiber | undefined
       try {
-        const fiber = this.ctx.plugin(MCP_PLUGIN, toMcpConfig(config))
+        fiber = this.ctx.plugin(MCP_PLUGIN, toMcpConfig(config))
         runtime.fiber = fiber
-        await fiber.await()
-        runtime.status = 'loaded'
+        await withTimeout(fiber.await(), START_TIMEOUT_MS, `MCP server ${id} startup timed out after ${START_TIMEOUT_MS}ms`)
+        if (runtime.fiber === fiber) runtime.status = 'loaded'
       } catch (error) {
+        if (runtime.fiber !== fiber) return
+        const message = error instanceof Error ? error.message : String(error)
         runtime.status = 'failed'
-        runtime.error = error instanceof Error ? error.message : String(error)
-        runtime.fiber = undefined
+        runtime.error = message
+        // 超时后 fiber 可能仍在启动:保留引用供后续 dispose 清理;真正的启动失败则放弃引用。
+        if (!message.includes('timed out')) runtime.fiber = undefined
       }
       this.refreshRestrictions()
     })
-    this.lifecycleTail = task.catch(() => {})
-    return task
   }
 
   private async disposeRuntime(runtime: RuntimeState): Promise<void> {
     const fiber = runtime.fiber
     runtime.fiber = undefined
     if (fiber === undefined) return
-    try { await fiber.dispose() } catch (error) {
-      this.ctx.logger.warn(`web-mcp-manager: failed to dispose server ${runtime.id}: ${String(error)}`)
+    try {
+      await withTimeout(fiber.dispose(), DISPOSE_TIMEOUT_MS, `failed to dispose server ${runtime.id} within ${DISPOSE_TIMEOUT_MS}ms`)
+    } catch (error) {
+      this.ctx.logger.warn(`web-mcp-manager: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -465,6 +472,21 @@ export class McpManagerController {
   private disabledToolNames(): string[] {
     return [...new Set(Object.values(this.document().disabledTools).flat())]
   }
+}
+
+/** 启动等待上限,防止挂起的连接永久拖住该服务的后续生命周期操作。 */
+const START_TIMEOUT_MS = 30_000
+/** 卸载上限,防止子进程清理异常阻塞插件卸载。 */
+const DISPOSE_TIMEOUT_MS = 15_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms)
+    promise.then(
+      value => { clearTimeout(timer); resolve(value) },
+      error => { clearTimeout(timer); reject(error) },
+    )
+  })
 }
 
 function stableFingerprint(value: unknown): string {

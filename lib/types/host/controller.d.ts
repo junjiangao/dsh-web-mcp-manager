@@ -23,7 +23,7 @@ export declare class McpManagerController {
     private rpcDispose;
     private guardDispose;
     private mutationTail;
-    private lifecycleTail;
+    private readonly lifecycleQueues;
     private suppressRestrictionEvents;
     private disposed;
     constructor(ctx: HostContext);
@@ -44,7 +44,7 @@ export declare class McpManagerController {
     private write;
     private assertRevision;
     private reconcileAll;
-    /** Serialize one server's lifecycle operations, including reload/dispose. */
+    /** Serialize one server's lifecycle operations, including reload/dispose, per server id. */
     private reconcileServer;
     private disposeRuntime;
     private snapshot;
