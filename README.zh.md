@@ -32,6 +32,15 @@ dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager
 dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager#main
 ```
 
+## 兼容性
+
+需要 DeepSeek Harness `0.1.5-rc.1` 或更高的 `0.1.x`。Host 半边在注入集中声明
+`webServer`，并在该服务上注册自有的、带鉴权的 `/mcp-manager` RPC 路由。插件刻意
+不使用 `connection.rpc.handle()`：该 API 解析 `owner.webServer` 时从 Connection 的
+fiber 出发，而不是调用方 fiber，会以
+`cannot get property "webServer" without inject` 让 profile 启动失败。浏览器半边仍
+使用标准 Connection RPC 信封，因此无需 patch 任何其他插件。
+
 ## 开发与更新产物
 
 源码位于 `src/`，发布给 GitHub 安装器的是已提交的 `lib/`。修改源码后，在提交前执行：

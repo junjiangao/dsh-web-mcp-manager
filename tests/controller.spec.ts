@@ -13,7 +13,14 @@ const ctx = {
     replace: vi.fn(async (_ns: string, next: SettingsDocument) => { document = next; revision += 1 }),
     writable: true,
   },
-  connection: { rpc: { handle: vi.fn(async () => async () => {}) } },
+  connection: { requestRejection: vi.fn(() => undefined) },
+  webServer: { register: vi.fn(() => () => {}) },
+  effect: vi.fn((execute: () => unknown) => {
+    const disposer = execute()
+    return async () => {
+      if (typeof disposer === 'function') await (disposer as () => void | Promise<void>)()
+    }
+  }),
   tools: {
     guard: vi.fn(() => () => {}),
     schemas: vi.fn(() => []),

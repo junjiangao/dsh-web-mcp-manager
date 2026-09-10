@@ -2,6 +2,7 @@
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
+import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { PluginInventorySnapshot } from '@deepseek-ai/dsh-host-plugin-inventory/types'
@@ -24,6 +25,7 @@ import {
 import { MANAGER_NAMESPACE, ManagerSettingsSchema, defaultDocument, validateStoredDocument } from '../settings.ts'
 import { toMcpConfig } from './mcp-config.ts'
 import { PerKeyQueue } from './keyed-queue.ts'
+import { registerManagerRpcRoute } from './rpc-route.ts'
 import {
   isRecord,
   mergeServerPatch,
@@ -64,6 +66,7 @@ interface HostContext extends Context {
   settings: SettingsProvider
   connection: HostConnectionHandle
   tools: ToolRuntime
+  webServer: WebServer
 }
 
 interface ToolSchemaView {
@@ -111,14 +114,10 @@ export class McpManagerController {
         ? 'MCP tool is disabled in the Web MCP panel'
         : undefined
     })
-    this.rpcDispose = this.ctx.connection.rpc.handle(
+    this.rpcDispose = registerManagerRpcRoute(
+      this.ctx,
       MCP_MANAGER_CHANNEL,
-      async (endpoint, payload, signal) => {
-        const result = await this.handle(endpoint, payload, signal)
-        return result.ok
-          ? result
-          : { ok: false as const, error: { ...result.error, details: result.error.details ?? {} } }
-      },
+      (endpoint, payload, signal) => this.handle(endpoint, payload, signal),
     )
     this.ctx.on('tools/change', () => {
       if (this.disposed || this.suppressRestrictionEvents) return

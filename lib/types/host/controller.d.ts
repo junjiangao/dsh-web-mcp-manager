@@ -1,6 +1,7 @@
 /** Host-side settings, RPC, MCP lifecycle, and tool policy controller. */
 import type { Context } from '@deepseek-ai/cordis';
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection';
+import type { WebServer } from '@deepseek-ai/dsh-host-webserver';
 import type { SettingsProvider } from '@deepseek-ai/dsh-settings';
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools';
 import type { RpcResult } from '../types.ts';
@@ -8,6 +9,7 @@ interface HostContext extends Context {
     settings: SettingsProvider;
     connection: HostConnectionHandle;
     tools: ToolRuntime;
+    webServer: WebServer;
 }
 /**
  * The controller deliberately owns no browser state. The settings provider is

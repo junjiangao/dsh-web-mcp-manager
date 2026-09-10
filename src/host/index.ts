@@ -2,12 +2,20 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
+import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-tools'
 import { McpManagerController } from './controller.ts'
 
 export const name = '@junjiangao/dsh-web-mcp-manager'
-export const inject = ['settings', 'connection', 'tools']
+/**
+ * `webServer` is a hard dependency: the manager registers its own authenticated
+ * RPC route on it (see `./rpc-route.ts`).  `connection.rpc.handle()` cannot be
+ * used here because it resolves `owner.webServer` from the *Connection* fiber
+ * rather than the caller fiber, which fails at load time in the shipped Web
+ * profile with `cannot get property "webServer" without inject`.
+ */
+export const inject = ['webServer', 'settings', 'connection', 'tools']
 
 /** Start the controller on the Host Cordis fiber. */
 export async function apply(ctx: Context): Promise<void> {
