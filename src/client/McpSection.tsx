@@ -32,26 +32,98 @@ const STATUS_KEYS: Record<ManagedServerView['status'], McpLocaleKey> = {
 
 /* ---------- Presentation constants (host `--dsw-*` design tokens + safe fallbacks) ---------- */
 
-const RADIUS = 'var(--dsw-corner-shape, 6px)'
-const MONO_FONT = 'var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)'
+/**
+ * Corner radii are plain lengths on purpose.
+ *
+ * `--dsw-corner-shape` is NOT a radius: the host defines it as a
+ * `corner-shape` function (`superellipse(1.5)`) and applies it to every
+ * element from its own `@supports` block. Feeding it to `border-radius`
+ * makes the declaration invalid, so on any browser that supports
+ * `corner-shape` the whole panel would silently fall back to square corners.
+ */
+const RADIUS_CARD = '8px'
+const RADIUS_CTRL = '6px'
+const MONO_FONT = 'var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)'
 
+/**
+ * Every token below is verified to exist in `@deepseek-ai/dsh-client-ui-theme`
+ * (light under `body`, dark under `body[data-ds-dark-theme]`). Tokens that do
+ * not exist keep the hardcoded fallback in both themes, so only well-known
+ * names are used here.
+ */
 const COLORS = {
   text: 'var(--dsw-alias-label-primary, #0f1115)',
-  textSecondary: 'var(--dsw-alias-label-secondary, #353638)',
-  textTertiary: 'var(--dsw-alias-label-tertiary, #61666b)',
-  textDimmed: 'var(--dsw-alias-label-dimmed, #979da6)',
-  textCaption: 'var(--dsw-alias-label-caption, #979da6)',
+  textSecondary: 'var(--dsw-alias-label-secondary, #61666b)',
+  textTertiary: 'var(--dsw-alias-label-tertiary, #81858c)',
   textInverted: 'var(--dsw-alias-label-primary-inverted, #ffffff)',
-  textError: 'var(--dsw-alias-label-error, #570c0c)',
+  border: 'var(--dsw-alias-border-l2, #e1e5ee)',
+  borderSubtle: 'var(--dsw-alias-border-l1, #ebeef2)',
+  borderStrong: 'var(--dsw-alias-border-l3, #dcdcdc)',
+  surface: 'var(--dsw-alias-bg-layer-2, #ffffff)',
+  surfaceSubtle: 'var(--dsw-alias-bg-layer-1, #fafafa)',
+  surfaceRaised: 'var(--dsw-alias-bg-layer-3, #f5f5f5)',
   business: 'var(--dsw-alias-state-business-primary, #2f6fed)',
   success: 'var(--dsw-alias-state-success-primary, #22c55e)',
   warn: 'var(--dsw-alias-state-warn-primary, #f59e0b)',
   danger: 'var(--dsw-alias-state-error-primary, #ec1313)',
+  idle: 'var(--dsw-alias-state-idle-primary, #d4d4d4)',
 } as const
 
-/** Focus ring lives in a scoped injected stylesheet (`:focus-visible` cannot be expressed inline). */
-const FOCUS_RING_CSS = '[data-mcp-manager="panel"] :focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #2f6fed); outline-offset: 1px; }'
-const FOCUS_STYLE_ID = 'mcp-manager-focus-style'
+const ELEVATION_SOFT = 'var(--dsw-elevation-soft, 0 1px 2px rgba(16, 24, 40, 0.05))'
+
+/**
+ * Scoped stylesheet for everything inline styles cannot express: hover /
+ * active feedback, disabled affordances, the focus ring and the disclosure
+ * chevron. `!important` is deliberate — the base look is inline, and inline
+ * declarations otherwise win over stylesheet rules.
+ */
+const PANEL_CSS = [
+  '[data-mcp-manager="panel"] :focus-visible { outline: 2px solid ' + COLORS.business + '; outline-offset: 1px; }',
+  '[data-mcp-manager="panel"] button { transition: background-color .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease; }',
+  '[data-mcp-manager="panel"] button:disabled { opacity: .45; cursor: not-allowed !important; }',
+  '[data-mcp-manager="panel"] button[data-variant="primary"]:not(:disabled):hover { background: var(--dsw-alias-button-primary-hover, #43454a) !important; }',
+  '[data-mcp-manager="panel"] button[data-variant="ghost"]:not(:disabled):hover { background: var(--dsw-alias-button-ghost-active-hover, #e9ecf2) !important; border-color: var(--dsw-alias-button-ghost-active-border, #979da6) !important; }',
+  '[data-mcp-manager="panel"] button[data-variant="danger"]:not(:disabled):hover { background: var(--dsw-alias-interactive-bg-hover-danger, rgba(236, 19, 19, 0.06)) !important; }',
+  '[data-mcp-manager="panel"] [data-mcp-server] { transition: border-color .15s ease, box-shadow .15s ease; }',
+  '[data-mcp-manager="panel"] [data-mcp-server]:hover { border-color: ' + COLORS.borderStrong + ' !important; box-shadow: var(--dsw-elevation-panel, ' + ELEVATION_SOFT + ') !important; }',
+  '[data-mcp-manager="panel"] input, [data-mcp-manager="panel"] select, [data-mcp-manager="panel"] textarea { transition: border-color .15s ease, background-color .15s ease; }',
+  '[data-mcp-manager="panel"] input:not(:disabled):hover, [data-mcp-manager="panel"] select:not(:disabled):hover, [data-mcp-manager="panel"] textarea:not(:disabled):hover { border-color: ' + COLORS.borderStrong + ' !important; }',
+  '[data-mcp-manager="panel"] input:focus-visible, [data-mcp-manager="panel"] select:focus-visible, [data-mcp-manager="panel"] textarea:focus-visible { border-color: ' + COLORS.business + ' !important; }',
+  '[data-mcp-manager="panel"] summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; }',
+  '[data-mcp-manager="panel"] summary::-webkit-details-marker { display: none; }',
+  '[data-mcp-manager="panel"] summary::before { content: ""; flex: 0 0 auto; width: 0; height: 0; border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent; opacity: .55; transition: transform .15s ease; }',
+  '[data-mcp-manager="panel"] details[open] > summary::before { transform: rotate(90deg); }',
+  '[data-mcp-manager="panel"] summary:hover { color: ' + COLORS.text + ' !important; }',
+].join('\n')
+const PANEL_STYLE_ID = 'mcp-manager-panel-style'
+
+/** Status colours are used for the dot only; the label stays a readable neutral. */
+const STATUS_TONES: Record<ManagedServerView['status'], { dot: string; surface: string }> = {
+  loaded: { dot: COLORS.success, surface: 'var(--dsw-alias-state-success-tertiary, #e6faed)' },
+  waiting: { dot: COLORS.warn, surface: 'var(--dsw-alias-state-warn-tertiary, #fef5e7)' },
+  loading: { dot: COLORS.business, surface: 'var(--dsw-alias-state-business-tertiary, #eaf3ff)' },
+  failed: { dot: COLORS.danger, surface: 'var(--dsw-alias-interactive-bg-hover-danger, rgba(236, 19, 19, 0.06))' },
+  disabled: { dot: COLORS.idle, surface: COLORS.surfaceRaised },
+}
+
+const badgeBase: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '2px 8px',
+  fontSize: 12,
+  lineHeight: '18px',
+  fontWeight: 500,
+  whiteSpace: 'nowrap',
+  borderRadius: 999,
+}
+
+const dotStyle: React.CSSProperties = {
+  flex: '0 0 auto',
+  width: 6,
+  height: 6,
+  borderRadius: '50%',
+}
 
 const chipBase: React.CSSProperties = {
   display: 'inline-flex',
@@ -63,28 +135,13 @@ const chipBase: React.CSSProperties = {
   fontWeight: 500,
   whiteSpace: 'nowrap',
   border: '1px solid',
-  borderRadius: RADIUS,
-}
-
-function statusChip(status: ManagedServerView['status']): React.CSSProperties {
-  switch (status) {
-    case 'waiting':
-      return { ...chipBase, color: COLORS.warn, background: 'var(--dsw-alias-state-warn-tertiary, #fef5e7)', borderColor: 'var(--dsw-alias-state-warn-secondary, #f7ad31)' }
-    case 'loading':
-      return { ...chipBase, color: COLORS.business, background: 'var(--dsw-alias-state-business-tertiary, #eaf3ff)', borderColor: COLORS.business }
-    case 'loaded':
-      return { ...chipBase, color: COLORS.success, background: 'var(--dsw-alias-state-success-tertiary, #e6faed)', borderColor: 'var(--dsw-alias-state-success-secondary, #4ed17e)' }
-    case 'failed':
-      return { ...chipBase, color: COLORS.danger, background: 'var(--dsw-alias-interactive-bg-hover-danger, #fef2f2)', borderColor: COLORS.danger }
-    case 'disabled':
-      return { ...chipBase, color: COLORS.textDimmed, background: 'var(--dsw-alias-bg-layer-3, #f5f5f5)', borderColor: 'var(--dsw-alias-border-l2, #e1e5ee)' }
-  }
+  borderRadius: RADIUS_CTRL,
 }
 
 function sourceChip(source: ReadonlyMcpEntry['source']): React.CSSProperties {
   return source === 'loader'
-    ? { ...chipBase, color: COLORS.textTertiary, background: 'var(--dsw-alias-bg-layer-1, #fafafa)', borderColor: 'var(--dsw-alias-border-l2, #e1e5ee)' }
-    : { ...chipBase, color: COLORS.business, background: 'var(--dsw-alias-state-business-tertiary, #eaf3ff)', borderColor: COLORS.business }
+    ? { ...chipBase, color: COLORS.textTertiary, background: COLORS.surfaceSubtle, borderColor: COLORS.borderSubtle }
+    : { ...chipBase, color: COLORS.business, background: 'var(--dsw-alias-state-business-tertiary, #eaf3ff)', borderColor: 'transparent' }
 }
 
 const panelStyle: React.CSSProperties = {
@@ -94,7 +151,7 @@ const panelStyle: React.CSSProperties = {
   fontFamily: 'var(--dsw-font-family, system-ui, -apple-system, "Segoe UI", sans-serif)',
 }
 
-const headerStyle: React.CSSProperties = { marginBlock: 8 }
+const headerStyle: React.CSSProperties = { marginBlock: '4px 0' }
 const headerRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }
 const titleStyle: React.CSSProperties = {
   margin: 0,
@@ -104,16 +161,17 @@ const titleStyle: React.CSSProperties = {
   fontWeight: 600,
   color: COLORS.text,
 }
-const subtitleRowStyle: React.CSSProperties = { marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }
+const subtitleRowStyle: React.CSSProperties = { marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }
+const metaLabelStyle: React.CSSProperties = { fontSize: 12, lineHeight: '18px', color: COLORS.textTertiary }
 const identityChipStyle: React.CSSProperties = {
   fontFamily: MONO_FONT,
   fontSize: 12,
   lineHeight: '18px',
-  color: COLORS.textCaption,
-  background: 'var(--dsw-alias-bg-layer-1, #fafafa)',
-  border: '1px solid var(--dsw-alias-border-l2, #e1e5ee)',
-  borderRadius: RADIUS,
-  padding: '2px 8px',
+  color: COLORS.textTertiary,
+  background: 'transparent',
+  border: '1px solid ' + COLORS.borderSubtle,
+  borderRadius: RADIUS_CTRL,
+  padding: '1px 6px',
   whiteSpace: 'nowrap',
 }
 
@@ -124,7 +182,7 @@ const baseButtonStyle: React.CSSProperties = {
   gap: 6,
   padding: '6px 12px',
   border: '1px solid transparent',
-  borderRadius: RADIUS,
+  borderRadius: RADIUS_CTRL,
   fontSize: 13,
   lineHeight: '18px',
   fontWeight: 500,
@@ -135,20 +193,10 @@ const buttonPrimaryStyle: React.CSSProperties = {
   background: 'var(--dsw-alias-button-primary-fill, #0f1115)',
   color: COLORS.textInverted,
 }
-const buttonSecondaryStyle: React.CSSProperties = {
+const buttonGhostStyle: React.CSSProperties = {
   ...baseButtonStyle,
   background: 'var(--dsw-alias-button-ghost-active-fill, #f1f3f5)',
-  borderColor: 'var(--dsw-alias-border-l2, #e1e5ee)',
-  color: COLORS.text,
-}
-const buttonInfoStyle: React.CSSProperties = {
-  ...baseButtonStyle,
-  background: 'var(--dsw-alias-button-info-fill, #3b82f6)',
-  color: COLORS.textInverted,
-}
-const buttonToolBarStyle: React.CSSProperties = {
-  ...baseButtonStyle,
-  background: 'var(--dsw-alias-button-tool-bar-fill, rgba(84, 85, 87, 0.5))',
+  borderColor: COLORS.border,
   color: COLORS.text,
 }
 const buttonDangerStyle: React.CSSProperties = {
@@ -161,7 +209,8 @@ const buttonDangerStyle: React.CSSProperties = {
 const fieldLabelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 12,
-  color: COLORS.textCaption,
+  lineHeight: '18px',
+  color: COLORS.textTertiary,
   marginBottom: 4,
 }
 const fieldInputStyle: React.CSSProperties = {
@@ -172,8 +221,8 @@ const fieldInputStyle: React.CSSProperties = {
   lineHeight: '18px',
   color: COLORS.text,
   background: 'var(--dsw-alias-bg-layer-1, #ffffff)',
-  border: '1px solid var(--dsw-alias-border-l2, #e1e5ee)',
-  borderRadius: RADIUS,
+  border: '1px solid ' + COLORS.border,
+  borderRadius: RADIUS_CTRL,
 }
 const textareaStyle: React.CSSProperties = { ...fieldInputStyle, resize: 'vertical' }
 const checkStyle: React.CSSProperties = {
@@ -181,60 +230,98 @@ const checkStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-const searchLabelStyle: React.CSSProperties = { display: 'block', width: '100%', marginBlock: '12px 16px' }
+const searchLabelStyle: React.CSSProperties = { display: 'block', width: '100%', marginBlock: '14px 16px' }
 const searchInputStyle: React.CSSProperties = { ...fieldInputStyle, width: '100%', maxWidth: '100%' }
 
 const cardStyle: React.CSSProperties = {
-  background: 'var(--dsw-alias-bg-layer-2, #ffffff)',
-  border: '1px solid var(--dsw-alias-border-l2, #e1e5ee)',
-  borderRadius: RADIUS,
+  background: COLORS.surface,
+  border: '1px solid ' + COLORS.border,
+  borderRadius: RADIUS_CARD,
   padding: 16,
-  marginBlock: 8,
-  boxShadow: 'var(--dsw-elevation-soft, 0 1px 2px rgba(16, 24, 40, 0.05))',
+  marginBlock: 10,
+  boxShadow: ELEVATION_SOFT,
 }
 
 const cardHeaderRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }
-const cardTitleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 14, color: COLORS.text }
+const cardTitleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 15, lineHeight: '22px', color: COLORS.text }
 const codeStyle: React.CSSProperties = { fontFamily: MONO_FONT, fontSize: 12, color: COLORS.textSecondary }
-const codeCaptionStyle: React.CSSProperties = { fontFamily: MONO_FONT, fontSize: 12, color: COLORS.textCaption }
+const codeCaptionStyle: React.CSSProperties = { fontFamily: MONO_FONT, fontSize: 12, color: COLORS.textTertiary }
 const toolCountChipStyle: React.CSSProperties = {
   ...chipBase,
   marginInlineStart: 'auto',
-  color: COLORS.textCaption,
-  background: 'var(--dsw-alias-bg-layer-1, #fafafa)',
-  borderColor: 'var(--dsw-alias-border-l2, #e1e5ee)',
+  color: COLORS.textTertiary,
+  background: COLORS.surfaceSubtle,
+  borderColor: COLORS.borderSubtle,
 }
 const metaLineStyle: React.CSSProperties = {
-  display: 'block',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  minWidth: 0,
+  color: COLORS.textTertiary,
+  fontSize: 12,
+  lineHeight: '18px',
+  marginBlock: '8px 0',
+}
+const metaTagStyle: React.CSSProperties = {
+  flex: '0 0 auto',
+  fontFamily: MONO_FONT,
+  fontSize: 11,
+  lineHeight: '16px',
+  color: COLORS.textTertiary,
+  background: COLORS.surfaceRaised,
+  borderRadius: 4,
+  padding: '0 6px',
+}
+const metaCodeStyle: React.CSSProperties = {
+  ...codeCaptionStyle,
+  minWidth: 0,
   overflow: 'hidden',
   whiteSpace: 'nowrap',
   textOverflow: 'ellipsis',
-  color: COLORS.textCaption,
-  fontSize: 12,
-  marginBlock: '6px 0',
 }
 
 const errorBoxStyle: React.CSSProperties = {
-  background: 'var(--dsw-alias-state-error-secondary, #fee2e2)',
-  color: COLORS.textError,
+  background: 'var(--dsw-alias-interactive-bg-hover-danger, rgba(236, 19, 19, 0.06))',
+  borderInlineStart: '3px solid ' + COLORS.danger,
+  color: COLORS.text,
   padding: '8px 12px',
-  borderRadius: RADIUS,
+  borderRadius: RADIUS_CTRL,
   marginBlock: 8,
   fontSize: 13,
+  lineHeight: '20px',
 }
 const noticeBoxStyle: React.CSSProperties = {
   background: 'var(--dsw-alias-state-warn-tertiary, #fef5e7)',
-  color: 'var(--dsw-alias-state-warn-label, #dd8629)',
-  border: '1px solid var(--dsw-alias-state-warn-secondary, #f7ad31)',
+  borderInlineStart: '3px solid ' + COLORS.warn,
+  color: COLORS.text,
   padding: '8px 12px',
-  borderRadius: RADIUS,
+  borderRadius: RADIUS_CTRL,
   marginBlock: 8,
   fontSize: 13,
+  lineHeight: '20px',
 }
-const statusTextStyle: React.CSSProperties = { color: COLORS.textSecondary, marginBlock: 8 }
-const hintStyle: React.CSSProperties = { color: COLORS.textCaption, fontSize: 12, marginBlock: 4 }
+const statusTextStyle: React.CSSProperties = { color: COLORS.textSecondary, marginBlock: 8, fontSize: 13 }
+const emptyStateStyle: React.CSSProperties = {
+  color: COLORS.textTertiary,
+  border: '1px dashed ' + COLORS.border,
+  borderRadius: RADIUS_CARD,
+  padding: '20px 16px',
+  marginBlock: 10,
+  fontSize: 13,
+  textAlign: 'center',
+}
+const hintStyle: React.CSSProperties = { color: COLORS.textTertiary, fontSize: 12, lineHeight: '18px', marginBlock: 4 }
 
-const actionsRowStyle: React.CSSProperties = { display: 'flex', gap: 8, marginBlock: 8, flexWrap: 'wrap' }
+const actionsRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  marginBlock: '12px 0',
+  paddingBlockStart: 12,
+  borderTop: '1px solid ' + COLORS.borderSubtle,
+  flexWrap: 'wrap',
+}
 
 const collapseStyle: React.CSSProperties = { marginBlock: 12 }
 const summaryStyle: React.CSSProperties = {
@@ -242,29 +329,32 @@ const summaryStyle: React.CSSProperties = {
   color: COLORS.textSecondary,
   fontWeight: 500,
   fontSize: 13,
+  lineHeight: '20px',
   paddingBlock: 2,
 }
 const listStyle: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0 }
 const toolItemStyle: React.CSSProperties = {
   paddingBlock: 10,
-  borderBottom: '1px solid var(--dsw-alias-separator-primary, #e1e5ee)',
+  borderBottom: '1px solid ' + COLORS.borderSubtle,
 }
-const toolRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }
-const toolDescriptionStyle: React.CSSProperties = { color: COLORS.textCaption, fontSize: 12 }
-const paramDetailsStyle: React.CSSProperties = { marginBlock: 8 }
+const toolRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap', fontSize: 13, lineHeight: '18px' }
+const toolDescriptionStyle: React.CSSProperties = { color: COLORS.textTertiary, fontSize: 12, lineHeight: '18px' }
+const paramDetailsStyle: React.CSSProperties = { marginBlock: '8px 0' }
 const preStyle: React.CSSProperties = {
   overflow: 'auto',
   fontSize: 12,
+  lineHeight: '18px',
   padding: 8,
   margin: 0,
   background: 'var(--dsw-alias-markdown-code-block, #f9fafb)',
-  borderRadius: RADIUS,
+  border: '1px solid ' + COLORS.borderSubtle,
+  borderRadius: RADIUS_CTRL,
 }
 
-const formTitleStyle: React.CSSProperties = { margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: COLORS.text }
+const formTitleStyle: React.CSSProperties = { margin: '0 0 12px', fontSize: 15, lineHeight: '22px', fontWeight: 600, color: COLORS.text }
 const fieldsetStyle: React.CSSProperties = {
-  border: '1px solid var(--dsw-alias-border-l1, #ebeef2)',
-  borderRadius: RADIUS,
+  border: '1px solid ' + COLORS.borderSubtle,
+  borderRadius: RADIUS_CTRL,
   padding: '12px 12px 4px',
   margin: '0 0 12px',
 }
@@ -300,13 +390,13 @@ const secretClearLabelStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-const readonlyDetailsStyle: React.CSSProperties = { ...collapseStyle, marginBlock: 16 }
+const readonlyDetailsStyle: React.CSSProperties = { ...collapseStyle, marginBlock: 20 }
 const readonlyItemStyle: React.CSSProperties = {
-  paddingBlock: 8,
-  borderBottom: '1px solid var(--dsw-alias-separator-primary, #e1e5ee)',
+  paddingBlock: 10,
+  borderBottom: '1px solid ' + COLORS.borderSubtle,
 }
 const readonlyHeaderRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }
-const readonlyStatusStyle: React.CSSProperties = { color: COLORS.textCaption, fontSize: 12, marginBlock: 4 }
+const readonlyStatusStyle: React.CSSProperties = { color: COLORS.textTertiary, fontSize: 12, lineHeight: '18px', marginBlock: '6px 0' }
 
 /* ------------------------------------------------------------------------------------------- */
 
@@ -372,12 +462,12 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
   const [message, setMessage] = useState<string | undefined>()
   const [pollFailed, setPollFailed] = useState(false)
 
-  // Scoped focus ring for keyboard navigation; injected once per document.
+  // Scoped stylesheet for states inline styles cannot express; injected once per document.
   useEffect(() => {
-    if (document.getElementById(FOCUS_STYLE_ID) !== null) return
+    if (document.getElementById(PANEL_STYLE_ID) !== null) return
     const style = document.createElement('style')
-    style.id = FOCUS_STYLE_ID
-    style.textContent = FOCUS_RING_CSS
+    style.id = PANEL_STYLE_ID
+    style.textContent = PANEL_CSS
     document.head.append(style)
   }, [])
 
@@ -482,26 +572,29 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
       <header style={headerStyle}>
         <div style={headerRowStyle}>
           <h2 style={titleStyle}>{t('title')}</h2>
-          <button type="button" style={buttonPrimaryStyle} onClick={() => setDraft(draftFromServer(undefined, snapshot?.revision ?? 0))} disabled={busy || snapshot?.writable === false}>{t('add')}</button>
-          <button type="button" style={buttonSecondaryStyle} onClick={() => { if (snapshot !== undefined) void run(() => api.snapshot({})) }} disabled={busy}>{t('refresh')}</button>
+          <button type="button" data-variant="primary" style={buttonPrimaryStyle} onClick={() => setDraft(draftFromServer(undefined, snapshot?.revision ?? 0))} disabled={busy || snapshot?.writable === false}>{t('add')}</button>
+          <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => { if (snapshot !== undefined) void run(() => api.snapshot({})) }} disabled={busy}>{t('refresh')}</button>
         </div>
-        <div style={subtitleRowStyle}><span style={identityChipStyle}>{PLUGIN_IDENTITY}</span></div>
+        <div style={subtitleRowStyle}>
+          <span style={metaLabelStyle}>{t('pluginId')}</span>
+          <span style={identityChipStyle}>{PLUGIN_IDENTITY}</span>
+        </div>
       </header>
       <label style={searchLabelStyle}>
         <span style={fieldLabelStyle}>{t('search')}</span>
-        <input type="search" style={searchInputStyle} value={query} onChange={event => setQuery(event.currentTarget.value)} placeholder={t('search')} />
+        <input type="search" style={searchInputStyle} value={query} onChange={event => setQuery(event.currentTarget.value)} placeholder={t('searchHint')} />
       </label>
       {message !== undefined ? <p role={isConflictMessage ? 'status' : 'alert'} style={isConflictMessage ? noticeBoxStyle : errorBoxStyle}>
         {message}
         {isConflictMessage && draft !== undefined
-          ? <button type="button" style={{ ...buttonSecondaryStyle, marginInlineStart: 8 }} onClick={rebase}>{t('rebase')}</button>
+          ? <button type="button" data-variant="ghost" style={{ ...buttonGhostStyle, marginInlineStart: 8 }} onClick={rebase}>{t('rebase')}</button>
           : null}
-        {!isConflictMessage ? <button type="button" style={{ ...buttonToolBarStyle, marginInlineStart: 8, padding: '2px 8px' }} onClick={() => setMessage(undefined)} aria-label={t('dismiss')}>✕</button> : null}
+        {!isConflictMessage ? <button type="button" data-variant="ghost" style={{ ...buttonGhostStyle, marginInlineStart: 8, padding: '2px 8px' }} onClick={() => setMessage(undefined)} aria-label={t('dismiss')}>✕</button> : null}
       </p> : null}
       {pollFailed && state.status === 'ready' ? <p role="status" style={noticeBoxStyle}>{t('pollFailed')}</p> : null}
       {state.status === 'loading' ? <p role="status" style={statusTextStyle}>{t('loading')}</p> : null}
       {state.status === 'error' ? <p role="alert" style={errorBoxStyle}>{state.message}</p> : null}
-      {snapshot !== undefined && servers.length === 0 ? <p style={statusTextStyle}>{snapshot.servers.length === 0 ? t('noServers') : t('empty')}</p> : null}
+      {snapshot !== undefined && servers.length === 0 ? <p style={emptyStateStyle}>{snapshot.servers.length === 0 ? t('noServers') : t('empty')}</p> : null}
       {servers.map(server => (
         <ServerCard
           key={server.id}
@@ -559,8 +652,8 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
             </details>
           </fieldset>
           <div style={formActionsStyle}>
-            <button type="submit" style={buttonPrimaryStyle} disabled={busy || snapshot?.writable === false}>{t('save')}</button>
-            <button type="button" style={buttonSecondaryStyle} onClick={() => setDraft(undefined)} disabled={busy}>{t('cancel')}</button>
+            <button type="submit" data-variant="primary" style={buttonPrimaryStyle} disabled={busy || snapshot?.writable === false}>{t('save')}</button>
+            <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => setDraft(undefined)} disabled={busy}>{t('cancel')}</button>
           </div>
         </form>
       ) : null}
@@ -619,10 +712,10 @@ function SecretFields({ label, entries, t, onChange }: SecretFieldsProps): React
           next[index] = { ...entry, clear: event.currentTarget.checked }
           onChange(next)
         }} /> {t('secretUnset')}</label>
-        <button type="button" style={buttonDangerStyle} onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</button>
+        <button type="button" data-variant="danger" style={buttonDangerStyle} onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</button>
       </div>
     </div>)}
-    <button type="button" style={buttonSecondaryStyle} onClick={() => onChange([...entries, newSecretDraft()])}>{t('addEntry')}</button>
+    <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => onChange([...entries, newSecretDraft()])}>{t('addEntry')}</button>
   </fieldset>
 }
 
@@ -640,10 +733,10 @@ function ArgsFields({ entries, t, onChange }: { entries: readonly string[]; t: M
         }} />
       </Field>
       <div style={secretActionsStyle}>
-        <button type="button" style={buttonDangerStyle} onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</button>
+        <button type="button" data-variant="danger" style={buttonDangerStyle} onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</button>
       </div>
     </div>)}
-    <button type="button" style={buttonSecondaryStyle} onClick={() => onChange([...entries, ''])}>{t('addEntry')}</button>
+    <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => onChange([...entries, ''])}>{t('addEntry')}</button>
   </fieldset>
 }
 
@@ -661,20 +754,28 @@ interface ServerCardProps {
 }
 
 function ServerCard({ server, tools, t, busy, writable, onEdit, onToggle, onReload, onRemove, onToolToggle }: ServerCardProps): ReactNode {
+  const tone = STATUS_TONES[server.status]
+  const target = server.transport === 'stdio' ? server.command : server.url
   return <article data-mcp-server={server.id} style={cardStyle}>
     <div style={cardHeaderRowStyle}>
-      <span data-mcp-status={server.status} style={statusChip(server.status)}>{t(STATUS_KEYS[server.status])}</span>
+      <span data-mcp-status={server.status} style={{ ...badgeBase, background: tone.surface }}>
+        <span aria-hidden="true" style={{ ...dotStyle, background: tone.dot }} />
+        {t(STATUS_KEYS[server.status])}
+      </span>
       <strong style={cardTitleStyle}>{server.label}</strong>
       <code style={codeCaptionStyle}>{server.id}</code>
       <span style={toolCountChipStyle}>{server.toolCount} {t('toolCount')}</span>
     </div>
-    <div style={metaLineStyle}>{server.transport === 'stdio' ? t('stdio') : t('http')} → {server.transport === 'stdio' ? server.command : server.url}</div>
+    <div style={metaLineStyle}>
+      <span style={metaTagStyle}>{server.transport === 'stdio' ? t('stdio') : t('http')}</span>
+      <code style={metaCodeStyle} title={target}>{target}</code>
+    </div>
     {server.error !== undefined ? <p role="alert" style={errorBoxStyle}>{server.error}</p> : null}
     <div style={actionsRowStyle}>
-      <button type="button" style={buttonPrimaryStyle} onClick={onToggle} disabled={busy || !writable}>{server.enabled ? t('disabled') : t('enabled')}</button>
-      <button type="button" style={buttonInfoStyle} onClick={onEdit} disabled={busy || !writable}>{t('edit')}</button>
-      <button type="button" style={buttonToolBarStyle} onClick={onReload} disabled={busy}>{t('reload')}</button>
-      <button type="button" style={buttonDangerStyle} onClick={onRemove} disabled={busy || !writable}>{t('remove')}</button>
+      <button type="button" data-variant="primary" style={buttonPrimaryStyle} onClick={onEdit} disabled={busy || !writable}>{t('edit')}</button>
+      <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={onToggle} disabled={busy || !writable}>{server.enabled ? t('disable') : t('enable')}</button>
+      <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={onReload} disabled={busy}>{t('reload')}</button>
+      <button type="button" data-variant="danger" style={{ ...buttonDangerStyle, marginInlineStart: 'auto' }} onClick={onRemove} disabled={busy || !writable}>{t('remove')}</button>
     </div>
     <details style={collapseStyle}>
       <summary style={summaryStyle}>{t('tools')} ({tools.length})</summary>

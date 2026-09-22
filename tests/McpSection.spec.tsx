@@ -166,4 +166,27 @@ describe('McpSection conflict-safe editing', () => {
     expect(screen.queryByText('OLD')).toBeNull()
     expect(screen.getByText('NEW')).toBeTruthy()
   })
+
+  it('labels the lifecycle button with the action instead of the current state', async () => {
+    api = {
+      snapshot: vi.fn(),
+      upsertServer: vi.fn(),
+      removeServer: vi.fn(),
+      setServerEnabled: vi.fn(),
+      reloadServer: vi.fn(),
+      setToolEnabled: vi.fn(),
+    } as unknown as ManagerClientApi
+    api.snapshot.mockResolvedValue(snapshot(3, [view({ enabled: true, status: 'loaded' })]))
+    const running = renderPanel()
+    await waitFor(() => expect(screen.getByText('disable')).toBeTruthy())
+    // 状态由徽章表达,按钮只表达动作,避免“已加载 + 已停用”这类自相矛盾的文案
+    expect(screen.getByText('loaded')).toBeTruthy()
+    expect(screen.queryByText('enabled')).toBeNull()
+    running.container.remove()
+
+    api.snapshot.mockResolvedValue(snapshot(3, [view({ enabled: false, status: 'disabled' })]))
+    renderPanel()
+    await waitFor(() => expect(screen.getByText('enable')).toBeTruthy())
+    expect(screen.getByText('disabled')).toBeTruthy()
+  })
 })

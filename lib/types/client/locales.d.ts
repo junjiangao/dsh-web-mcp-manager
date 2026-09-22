@@ -2,6 +2,7 @@
 export declare const zh: {
     readonly nav: "MCP";
     readonly title: "MCP 服务";
+    readonly pluginId: "插件";
     readonly add: "新增服务";
     readonly edit: "编辑";
     readonly save: "保存";
@@ -11,6 +12,8 @@ export declare const zh: {
     readonly reload: "重新加载";
     readonly enabled: "已启用";
     readonly disabled: "已停用";
+    readonly enable: "启用";
+    readonly disable: "停用";
     readonly waiting: "等待加载";
     readonly loading: "加载中";
     readonly loaded: "已加载";
@@ -40,6 +43,7 @@ export declare const zh: {
     readonly maxDelay: "最大重试延迟（毫秒）";
     readonly maxAttempts: "最大重试次数";
     readonly search: "搜索服务或工具";
+    readonly searchHint: "按名称、命令或工具名筛选";
     readonly tools: "工具";
     readonly toolCount: "个工具";
     readonly noServers: "还没有面板管理的 MCP 服务。";
