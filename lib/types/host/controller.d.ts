@@ -2,11 +2,12 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection';
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver';
-import type { SettingsProvider } from '@deepseek-ai/dsh-settings';
+import type { SettingsForms } from '@deepseek-ai/dsh-settings';
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools';
 import type { RpcResult } from '../types.ts';
+import { type ManagerSettings } from '../settings.ts';
 interface HostContext extends Context {
-    settings: SettingsProvider;
+    settings: SettingsForms;
     connection: HostConnectionHandle;
     tools: ToolRuntime;
     webServer: WebServer;
@@ -18,9 +19,9 @@ interface HostContext extends Context {
  */
 export declare class McpManagerController {
     private readonly ctx;
+    private readonly config;
     private readonly runtimes;
     private readonly restrictions;
-    private scope;
     private settingsWatchDispose;
     private rpcDispose;
     private guardDispose;
@@ -28,13 +29,19 @@ export declare class McpManagerController {
     private readonly lifecycleQueues;
     private suppressRestrictionEvents;
     private disposed;
-    constructor(ctx: HostContext);
-    /** Register the settings namespace, RPC channel, guard, and initial servers. */
+    /**
+     * @param ctx - the Host plugin context.
+     * @param config - the entry's resolved volatile refs; every read goes through
+     * them, so a committed edit is visible to the next operation.
+     */
+    constructor(ctx: HostContext, config: ManagerSettings);
+    /** Register the RPC channel, tool guard, settings watch, and initial servers. */
     start(): Promise<void>;
     /** Dispose RPC, tool policy, and all child MCP clients after operations drain. */
     dispose(): Promise<void>;
     /** Dispatch one authenticated Connection RPC endpoint. */
     handle(endpoint: string, payload: unknown, signal: AbortSignal): Promise<RpcResult<unknown>>;
+    /** The live document, read through the entry's volatile refs on every call. */
     private document;
     private revision;
     private enqueueMutation;

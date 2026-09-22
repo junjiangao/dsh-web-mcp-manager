@@ -22,7 +22,7 @@ import { apply as connectionApply, inject as connectionInject } from '@deepseek-
 import type { WebRoute, WebServer, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
 import { describe, expect, it } from 'vitest'
 import { apply as hostApply, inject as hostInject, name as hostName } from '../src/host/index.ts'
-import { MANAGER_NAMESPACE, defaultDocument } from '../src/settings.ts'
+import { Config, MANAGER_NAMESPACE, defaultDocument } from '../src/settings.ts'
 import { MCP_MANAGER_CHANNEL } from '../src/types.ts'
 
 /** Mutable credential-record double: BrowserAuth.create() only needs these three. */
@@ -70,15 +70,11 @@ function fakeWebServer(routes: WebRoute[], upgrades: WebUpgradeRoute[]): WebServ
   } as unknown as WebServer
 }
 
-/** Minimal SettingsProvider double holding the manager document in memory. */
+/** Minimal settings double holding the manager document in memory. */
 function fakeSettings(): unknown {
   let document = defaultDocument()
   let revision = 0
   return {
-    register: () => ({
-      get: () => document,
-      watch: () => () => {},
-    }),
     describe: () => [{ ns: MANAGER_NAMESPACE, revision }],
     replace: async (_ns: string, next: typeof document) => {
       document = next
@@ -140,7 +136,7 @@ describe('Host entry load path', () => {
 
   it('mounts against the real Connection plugin and claims the manager channel', async () => {
     const { ctx, routes } = await fixture()
-    const host = ctx.plugin({ name: hostName, inject: [...hostInject], apply: hostApply } as never)
+    const host = ctx.plugin({ name: hostName, inject: [...hostInject], Config, apply: hostApply } as never)
     await host.await()
     expect(routes.map(route => route.path)).toContain(MCP_MANAGER_CHANNEL)
   })
@@ -150,6 +146,7 @@ describe('Host entry load path', () => {
     const host = ctx.plugin({
       name: hostName,
       inject: ['settings', 'connection', 'tools'],
+      Config,
       apply: hostApply,
     } as never)
     await Promise.resolve()

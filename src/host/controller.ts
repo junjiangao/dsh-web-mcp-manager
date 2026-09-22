@@ -7,7 +7,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { PluginInventorySnapshot } from '@deepseek-ai/dsh-host-plugin-inventory/types'
 import { apply as mcpApply, Config as McpConfig } from '@deepseek-ai/dsh-mcp-client'
-import type { SettingsScope, SettingsProvider } from '@deepseek-ai/dsh-settings'
+import type { SettingsForms } from '@deepseek-ai/dsh-settings'
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import type { SettingsDocument, StoredServer, ManagedServerView, ManagedToolView, ReadonlyMcpEntry, RpcError, RpcResult } from '../types.ts'
 import {
@@ -22,7 +22,7 @@ import {
   type Snapshot,
   type UpsertServerRequest,
 } from '../types.ts'
-import { MANAGER_NAMESPACE, ManagerSettingsSchema, defaultDocument, validateStoredDocument } from '../settings.ts'
+import { MANAGER_NAMESPACE, validateStoredDocument, type ManagerSettings } from '../settings.ts'
 import { toMcpConfig } from './mcp-config.ts'
 import { PerKeyQueue } from './keyed-queue.ts'
 import { registerManagerRpcRoute } from './rpc-route.ts'
@@ -63,7 +63,7 @@ interface AgentRestriction {
 }
 
 interface HostContext extends Context {
-  settings: SettingsProvider
+  settings: SettingsForms
   connection: HostConnectionHandle
   tools: ToolRuntime
   webServer: WebServer
@@ -83,7 +83,6 @@ interface ToolSchemaView {
 export class McpManagerController {
   private readonly runtimes = new Map<string, RuntimeState>()
   private readonly restrictions: AgentRestriction[] = []
-  private scope: SettingsScope<SettingsDocument> | undefined
   private settingsWatchDispose: (() => void) | undefined
   private rpcDispose: (() => Promise<void>) | undefined
   private guardDispose: (() => void) | undefined
@@ -92,17 +91,23 @@ export class McpManagerController {
   private suppressRestrictionEvents = false
   private disposed = false
 
-  constructor(private readonly ctx: HostContext) {}
+  /**
+   * @param ctx - the Host plugin context.
+   * @param config - the entry's resolved volatile refs; every read goes through
+   * them, so a committed edit is visible to the next operation.
+   */
+  constructor(private readonly ctx: HostContext, private readonly config: ManagerSettings) {}
 
-  /** Register the settings namespace, RPC channel, guard, and initial servers. */
+  /** Register the RPC channel, tool guard, settings watch, and initial servers. */
   async start(): Promise<void> {
-    this.scope = this.ctx.settings.register(MANAGER_NAMESPACE, ManagerSettingsSchema, {
-      base: defaultDocument(),
-      validate: validateStoredDocument,
-    })
-    this.settingsWatchDispose = this.scope.watch(() => {
+    // dsh 0.1.7 owns the document through the Loader entry: there is no
+    // settings.register() to subscribe to, and the Host announces every
+    // committed revision on 'settings/document-updated'. Another entry's
+    // write is none of this controller's business.
+    this.settingsWatchDispose = this.ctx.on('settings/document-updated', (ns) => {
+      if (String(ns) !== String(MANAGER_NAMESPACE)) return
       if (this.disposed) return
-      return this.reconcileAll().catch(error => {
+      void this.reconcileAll().catch(error => {
         this.ctx.logger.warn(`web-mcp-manager: settings change reconciliation failed: ${String(error)}`)
       })
     })
@@ -123,8 +128,10 @@ export class McpManagerController {
       if (this.disposed || this.suppressRestrictionEvents) return
       this.refreshRestrictions()
     })
+    // 0.1.7 types this hook as returning the (absent) waterfall value.
     this.ctx.on('agent/created', ({ agent }) => {
       this.installRestriction(agent)
+      return undefined
     })
     this.ctx.on('agent/disposed', ({ agent }) => {
       this.removeRestriction(agent)
@@ -176,10 +183,14 @@ export class McpManagerController {
     }
   }
 
+  /** The live document, read through the entry's volatile refs on every call. */
   private document(): SettingsDocument {
-    const scope = this.scope
-    if (scope === undefined) return defaultDocument()
-    return scope.get()
+    // Detached from the refs: schemastery projects a deeply-readonly value,
+    // while the document this controller builds and writes back is mutable.
+    return structuredClone({
+      servers: this.config.servers.get() ?? {},
+      disabledTools: this.config.disabledTools.get() ?? {},
+    }) as SettingsDocument
   }
 
   private revision(): number {

@@ -34,7 +34,13 @@ dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager#main
 
 ## 兼容性
 
-需要 DeepSeek Harness `0.1.5-rc.1` 或更高的 `0.1.x`。Host 半边在注入集中声明
+需要 DeepSeek Harness `0.1.7-alpha.1` 或更高的 `0.1.x`。dsh 0.1.7 起，插件配置由
+Loader entry 自身承载：本插件从 `src/settings.ts` 导出 `Config` 作为设置页渲染的表单，
+每个字段声明为 `volatile()`，并通过 `ctx.settings.replace()` 写回。已被移除的
+`settings.register()` 及其 `SettingsProvider`/`SettingsScope` 类型不再使用，因此更早的
+0.1.x 版本不再受支持。
+
+Host 半边在注入集中声明
 `webServer`，并在该服务上注册自有的、带鉴权的 `/mcp-manager` RPC 路由。插件刻意
 不使用 `connection.rpc.handle()`：该 API 解析 `owner.webServer` 时从 Connection 的
 fiber 出发，而不是调用方 fiber，会以

@@ -1,5 +1,6 @@
 /** Host settings schema and defaults for the MCP manager namespace. */
 
+import type { Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { ResolvedReconnectPolicy } from '@deepseek-ai/dsh-mcp-client'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
@@ -22,7 +23,7 @@ const _reconnectDefaultsCheck: ResolvedReconnectPolicy = DEFAULT_RECONNECT
 
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000
 
-const ReconnectSchema: z<StoredReconnectPolicy> = z.object({
+const ReconnectSchema = z.object({
   enabled: z.boolean().default(DEFAULT_RECONNECT.enabled),
   initialDelayMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(DEFAULT_RECONNECT.initialDelayMs),
   maxDelayMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(DEFAULT_RECONNECT.maxDelayMs),
@@ -34,7 +35,7 @@ const ReconnectSchema: z<StoredReconnectPolicy> = z.object({
  * lets the Host settings redactor enumerate every env/header key while the
  * browser receives only `SecretState` records assembled by the manager.
  */
-const ServerSchema: z<StoredServer> = z.object({
+const ServerSchema = z.object({
   id: z.string().required(),
   label: z.string().default(''),
   enabled: z.boolean().default(true),
@@ -51,10 +52,40 @@ const ServerSchema: z<StoredServer> = z.object({
   reconnect: ReconnectSchema,
 })
 
-export const ManagerSettingsSchema: z<SettingsDocument> = z.object({
-  servers: z.dict(ServerSchema).default({}),
-  disabledTools: z.dict(z.array(z.string())).default({}),
-})
+/**
+ * The Loader entry's schema, which is also the form the settings page renders.
+ *
+ * dsh 0.1.7 owns plugin configuration through the entry itself: there is no
+ * `settings.register()` any more, so the two top-level fields are declared
+ * `volatile()` — the whole subtree of each becomes live, which is what lets a
+ * committed edit reach the running controller without re-registering it.
+ */
+export const Config = z.object({
+  servers: z.dict(ServerSchema).default({}).volatile(),
+  disabledTools: z.dict(z.array(z.string())).default({}).volatile(),
+}) as z<ManagerSettingsInput, ManagerSettings>
+
+/** The schema under its historical name; both refer to the same entry config. */
+export const ManagerSettingsSchema = Config
+
+/** The shape a composition file writes: plain values, every field optional. */
+export interface ManagerSettingsInput {
+  /** Configured MCP servers keyed by id. */
+  servers?: Record<string, StoredServer>
+  /** Per-server disabled tool names. */
+  disabledTools?: Record<string, string[]>
+}
+
+/**
+ * Resolved manager config as the Host hands it to `apply`: each field is a
+ * live ref, read per operation rather than captured once at load.
+ */
+export interface ManagerSettings {
+  /** Configured MCP servers keyed by id. */
+  servers: Volatile<Record<string, StoredServer>>
+  /** Per-server disabled tool names. */
+  disabledTools: Volatile<Record<string, string[]>>
+}
 
 export function defaultServer(id: string): StoredServer {
   return {

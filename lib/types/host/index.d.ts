@@ -1,7 +1,14 @@
 /** Host entry for the Web MCP manager plugin. */
 import type { Context } from '@deepseek-ai/cordis';
 import { McpManagerController } from './controller.ts';
+import type { ManagerSettings } from '../settings.ts';
 export declare const name = "@junjiangao/dsh-web-mcp-manager";
+/**
+ * The Loader entry's config schema. dsh 0.1.7 renders this on the settings
+ * page and hands the resolved refs to {@link apply}; the manager writes back
+ * through `ctx.settings.replace()` against the same entry id.
+ */
+export { Config } from '../settings.ts';
 /**
  * `webServer` is a hard dependency: the manager registers its own authenticated
  * RPC route on it (see `./rpc-route.ts`).  `connection.rpc.handle()` cannot be
@@ -10,7 +17,11 @@ export declare const name = "@junjiangao/dsh-web-mcp-manager";
  * profile with `cannot get property "webServer" without inject`.
  */
 export declare const inject: string[];
-/** Start the controller on the Host Cordis fiber. */
-export declare function apply(ctx: Context): Promise<void>;
+/**
+ * Start the controller on the Host Cordis fiber.
+ * @param ctx - the Host plugin context.
+ * @param config - the entry's resolved volatile refs.
+ */
+export declare function apply(ctx: Context, config: ManagerSettings): Promise<void>;
 export { McpManagerController };
 //# sourceMappingURL=index.d.ts.map

@@ -34,7 +34,14 @@ dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager#main
 
 ## Compatibility
 
-Requires DeepSeek Harness `0.1.5-rc.1` or a later `0.1.x`. The Host entry
+Requires DeepSeek Harness `0.1.7-alpha.1` or a later `0.1.x`. dsh 0.1.7 owns plugin
+configuration through the Loader entry, so this plugin exports `Config` from
+`src/settings.ts` as the form the settings page renders, declares every field
+`volatile()`, and writes back through `ctx.settings.replace()`. The removed
+`settings.register()` API and its `SettingsProvider`/`SettingsScope` types are no
+longer used, so earlier 0.1.x builds are not supported.
+
+The Host entry
 declares `webServer` in its injection set and registers its own authenticated
 `/mcp-manager` RPC route on that service. It deliberately does not use
 `connection.rpc.handle()`: that API resolves `owner.webServer` from the
