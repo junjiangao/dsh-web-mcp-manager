@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Web MCP Manager",
+    "description": "Settings panel and Host lifecycle manager for user-owned MCP servers: add, enable, reload, and toggle tools per server."
+  }
+}

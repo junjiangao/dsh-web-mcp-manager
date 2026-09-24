@@ -17,6 +17,8 @@ Restart an already-running Web profile after installation. Bundle membership is 
 
 The plugin is mounted under its scoped npm package name `@junjiangao/dsh-web-mcp-manager`. The community registration identity `junjiangao/dsh-web-mcp-manager` is declared in the repository-root `registry.json`.
 
+The Web **Plugins** page reads this plugin's display text from `locale/en.json` — the anchor the Host resolves first — plus one file per language beside it, each carrying `meta.title` and `meta.description`. Both files are read through the package specifier, so `exports` maps `"./locale/*.json"` and `files` carries `locale/*.json`; a locale file that is not exported is metadata the page never sees. Without them the page falls back to the untranslated `package.json` `name` and `description` — the raw `@junjiangao/dsh-web-mcp-manager`. The settings section's own copy is separate and lives in `src/client/locales.ts`, so a new string belongs in both places.
+
 To upgrade from an older version installed under the unscoped package name `dsh-web-mcp-manager`, remove the old install first and then add the new one:
 
 ```bash

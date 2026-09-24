@@ -17,6 +17,8 @@ dsh web
 
 安装后插件以其 npm 作用域包名 `@junjiangao/dsh-web-mcp-manager` 挂载。社区注册身份 `junjiangao/dsh-web-mcp-manager` 由仓库根目录的 `registry.json` 声明。
 
+Web 的**插件页**读取本插件的显示文案来自 `locale/en.json`（Host 首先解析的锚点）以及同目录下的每种语言一个文件，各自携带 `meta.title` 与 `meta.description`。这些文件是**通过包说明符**解析的，因此 `exports` 里要有 `"./locale/*.json"`、`files` 里要有 `locale/*.json`；一个没有导出的 locale 文件对插件页等于不存在。缺失时会回退到未翻译的 `package.json` `name` 与 `description`，也就是裸露的 `@junjiangao/dsh-web-mcp-manager`。设置区自身的文案是另一套，位于 `src/client/locales.ts`，新增文案时两处都要写。
+
 从旧版本（包名 `dsh-web-mcp-manager`）升级时，需先移除旧安装再重新添加：
 
 ```bash
