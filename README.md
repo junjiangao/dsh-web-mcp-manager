@@ -34,12 +34,23 @@ dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager#main
 
 ## Compatibility
 
-Requires DeepSeek Harness `0.1.7-alpha.1` or a later `0.1.x`. dsh 0.1.7 owns plugin
+Requires DeepSeek Harness `0.1.7-rc.1` or a later `0.1.x`. dsh 0.1.7 owns plugin
 configuration through the Loader entry, so this plugin exports `Config` from
 `src/settings.ts` as the form the settings page renders, declares every field
 `volatile()`, and writes back through `ctx.settings.replace()`. The removed
 `settings.register()` API and its `SettingsProvider`/`SettingsScope` types are no
 longer used, so earlier 0.1.x builds are not supported.
+
+Revision conflicts carry the settings service's own identity. The controller
+raises `SettingsConflictError` for its fail-fast check and classifies that class
+structurally, so a conflict raised by `replace()` inside the service maps to the
+same wire code. The write itself stays on `replace()` rather than the
+path-addressed `settings.mutate()`: `mutate()` exists for a caller holding an
+incomplete (redacted) view of a namespace, whereas this controller reads the
+entry's volatile refs — the resolved config, secrets included — and therefore
+restates every server. `ctx.settings.configure({ auto: false })` is deliberately
+not called either: no shipped Web surface consumes `autoGenerate` yet, so it
+would be a no-op.
 
 The Host entry
 declares `webServer` in its injection set and registers its own authenticated

@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection';
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver';
-import type { SettingsForms } from '@deepseek-ai/dsh-settings';
+import { type SettingsForms } from '@deepseek-ai/dsh-settings';
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools';
 import type { RpcResult } from '../types.ts';
 import { type ManagerSettings } from '../settings.ts';
@@ -50,7 +50,24 @@ export declare class McpManagerController {
     private setEnabled;
     private reload;
     private setTool;
+    /**
+     * Commit one whole document through `settings.replace()`.
+     *
+     * `replace()` — not the path-addressed `settings.mutate()` — is the right
+     * member here. `mutate()` exists for a caller holding an INCOMPLETE view of a
+     * namespace (the redacted wire view), which must name only the fields it means
+     * so the write cannot silently drop the `role('secret')` values it never
+     * received. This controller reads the entry's volatile refs, i.e. the resolved
+     * config with secrets included, so it restates every server anyway; `replace()`
+     * then makes the write one all-or-nothing commit guarded by `expectedRevision`.
+     */
     private write;
+    /**
+     * Fail fast before the next document is rebuilt. `settings.replace()` runs the
+     * same revision check at write time; raising the settings service's own error
+     * class here keeps one conflict identity across the whole path, so
+     * {@link classifyError} matches it structurally instead of by message text.
+     */
     private assertRevision;
     private reconcileAll;
     /** Serialize one server's lifecycle operations, including reload/dispose, per server id. */

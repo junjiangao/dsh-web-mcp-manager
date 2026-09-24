@@ -34,11 +34,19 @@ dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager#main
 
 ## 兼容性
 
-需要 DeepSeek Harness `0.1.7-alpha.1` 或更高的 `0.1.x`。dsh 0.1.7 起，插件配置由
+需要 DeepSeek Harness `0.1.7-rc.1` 或更高的 `0.1.x`。dsh 0.1.7 起，插件配置由
 Loader entry 自身承载：本插件从 `src/settings.ts` 导出 `Config` 作为设置页渲染的表单，
 每个字段声明为 `volatile()`，并通过 `ctx.settings.replace()` 写回。已被移除的
 `settings.register()` 及其 `SettingsProvider`/`SettingsScope` 类型不再使用，因此更早的
 0.1.x 版本不再受支持。
+
+版本冲突沿用 settings 服务自身的错误身份：控制器的快速失败检查直接抛出
+`SettingsConflictError`，错误分类也按类型结构化匹配，因此 `replace()` 在服务内部抛出的
+冲突会映射到同一个线上错误码。写入仍使用 `replace()` 而非按路径的
+`settings.mutate()`：`mutate()` 面向只持有命名空间**不完整视图**（脱敏后）的调用方，
+而本控制器读取的是 entry 的 volatile refs（已解析、含密钥的完整配置），因此本来就会
+重述每个服务。同样刻意不调用 `ctx.settings.configure({ auto: false })`：当前 Web
+界面还没有消费 `autoGenerate` 的地方，调用它只是空操作。
 
 Host 半边在注入集中声明
 `webServer`，并在该服务上注册自有的、带鉴权的 `/mcp-manager` RPC 路由。插件刻意

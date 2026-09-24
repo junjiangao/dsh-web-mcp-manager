@@ -7,7 +7,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { PluginInventorySnapshot } from '@deepseek-ai/dsh-host-plugin-inventory/types'
 import { apply as mcpApply, Config as McpConfig } from '@deepseek-ai/dsh-mcp-client'
-import type { SettingsForms } from '@deepseek-ai/dsh-settings'
+import { SettingsConflictError, type SettingsForms } from '@deepseek-ai/dsh-settings'
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import type { SettingsDocument, StoredServer, ManagedServerView, ManagedToolView, ReadonlyMcpEntry, RpcError, RpcResult } from '../types.ts'
 import {
@@ -289,19 +289,32 @@ export class McpManagerController {
     })
   }
 
+  /**
+   * Commit one whole document through `settings.replace()`.
+   *
+   * `replace()` — not the path-addressed `settings.mutate()` — is the right
+   * member here. `mutate()` exists for a caller holding an INCOMPLETE view of a
+   * namespace (the redacted wire view), which must name only the fields it means
+   * so the write cannot silently drop the `role('secret')` values it never
+   * received. This controller reads the entry's volatile refs, i.e. the resolved
+   * config with secrets included, so it restates every server anyway; `replace()`
+   * then makes the write one all-or-nothing commit guarded by `expectedRevision`.
+   */
   private async write(next: SettingsDocument, expectedRevision: number): Promise<void> {
     if (!this.ctx.settings.writable) throw new Error('settings provider is read-only')
     validateStoredDocument(next)
     await this.ctx.settings.replace(MANAGER_NAMESPACE, next, expectedRevision)
   }
 
+  /**
+   * Fail fast before the next document is rebuilt. `settings.replace()` runs the
+   * same revision check at write time; raising the settings service's own error
+   * class here keeps one conflict identity across the whole path, so
+   * {@link classifyError} matches it structurally instead of by message text.
+   */
   private assertRevision(expected: number): void {
     const actual = this.revision()
-    if (actual !== expected) {
-      const error = new Error(`MCP settings changed since this page was read (expected revision ${String(expected)}, now ${String(actual)})`)
-      Object.assign(error, { code: 'SETTINGS_CONFLICT' })
-      throw error
-    }
+    if (actual !== expected) throw new SettingsConflictError(MANAGER_NAMESPACE, expected, actual)
   }
 
   private async reconcileAll(): Promise<void> {
@@ -489,6 +502,16 @@ const START_TIMEOUT_MS = 30_000
 /** 卸载上限,防止子进程清理异常阻塞插件卸载。 */
 const DISPOSE_TIMEOUT_MS = 15_000
 
+/**
+ * Bound one Cordis fiber promise.
+ *
+ * `@deepseek-ai/dsh-timeout` owns timeout arithmetic in the shipped Host, but its
+ * primitives (`deadline`, `idleWatchdog`, `timeoutOf`) only NOTIFY through an
+ * AbortSignal and require the awaited work to observe that signal.
+ * `fiber.await()` and `fiber.dispose()` accept no signal, so the manager needs
+ * the promise-shaped bound below and turns its own message into the server's
+ * failure state.
+ */
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), ms)
@@ -526,8 +549,14 @@ function failure(code: RpcError['code'], message: string): RpcResult<never> {
 }
 
 function classifyError(error: unknown): RpcError['code'] {
+  // Structural first: the settings service raises SettingsConflictError from both
+  // this controller's fail-fast check and its own write-time check, so one class
+  // test covers the whole conflict path.
+  if (error instanceof SettingsConflictError) return 'conflict'
   const code = (error as { code?: unknown } | null)?.code
   if (code === 'MCP_CONFIG_VALIDATION') return 'validation'
+  // Cross-instance fallback: a duplicated settings module would defeat the
+  // `instanceof` above while still carrying the service's stable machine code.
   if (code === 'SETTINGS_CONFLICT') return 'conflict'
   if (error instanceof TypeError) return 'bad-request'
   if (typeof error === 'object' && error !== null && 'message' in error && String((error as { message: unknown }).message).includes('read-only')) return 'not-writable'

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { SettingsConflictError } from '@deepseek-ai/dsh-settings'
 import type { SettingsDocument } from '../src/types.ts'
 import { defaultDocument, defaultServer } from '../src/settings.ts'
 import { McpManagerController } from '../src/host/controller.ts'
@@ -56,6 +57,29 @@ describe('McpManagerController', () => {
     await controller.start()
     revision = 2
     const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' }, expectedRevision: 1 }, signal())
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('conflict')
+  })
+
+  it('carries the settings service conflict identity on a stale revision', async () => {
+    const controller = new McpManagerController(ctx as never, config as never)
+    await controller.start()
+    revision = 2
+    const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' }, expectedRevision: 1 }, signal())
+    expect(result.ok).toBe(false)
+    // The manager raises `SettingsConflictError` itself, so the wire message is
+    // the service's own wording rather than a locally formatted string.
+    if (!result.ok) expect(result.error.message).toContain('settings namespace')
+  })
+
+  it('classifies a write-time conflict raised by the settings service itself', async () => {
+    const controller = new McpManagerController(ctx as never, config as never)
+    await controller.start()
+    // The manager's fail-fast check passes, so the only conflict identity that
+    // can reach the classifier is the one `replace()` throws.
+    ;(ctx as never as { settings: { replace: ReturnType<typeof vi.fn> } }).settings.replace
+      .mockRejectedValueOnce(new SettingsConflictError('web-mcp-manager', 0, 1))
+    const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' }, expectedRevision: 0 }, signal())
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.code).toBe('conflict')
   })
