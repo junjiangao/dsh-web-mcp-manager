@@ -1,6 +1,7 @@
 /** Host entry for the Web MCP manager plugin. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-settings'
@@ -11,7 +12,7 @@ import type { ManagerSettings } from '../settings.ts'
 export const name = '@junjiangao/dsh-web-mcp-manager'
 
 /**
- * The Loader entry's config schema. dsh 0.1.7 renders this on the settings
+ * The Loader entry's config schema. dsh 0.2.0-rc.1 renders this on the settings
  * page and hands the resolved refs to {@link apply}; the manager writes back
  * through `ctx.settings.replace()` against the same entry id.
  */

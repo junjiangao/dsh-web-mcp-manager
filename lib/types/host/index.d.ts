@@ -4,7 +4,7 @@ import { McpManagerController } from './controller.ts';
 import type { ManagerSettings } from '../settings.ts';
 export declare const name = "@junjiangao/dsh-web-mcp-manager";
 /**
- * The Loader entry's config schema. dsh 0.1.7 renders this on the settings
+ * The Loader entry's config schema. dsh 0.2.0-rc.1 renders this on the settings
  * page and hands the resolved refs to {@link apply}; the manager writes back
  * through `ctx.settings.replace()` against the same entry id.
  */

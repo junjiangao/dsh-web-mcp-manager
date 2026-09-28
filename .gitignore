@@ -3,3 +3,4 @@ npm-debug.log*
 pnpm-debug.log*
 *.tgz
 *.tsbuildinfo
+.codebase-memory/

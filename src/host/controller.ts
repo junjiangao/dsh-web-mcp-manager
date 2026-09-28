@@ -1,6 +1,7 @@
-/** Host-side settings, RPC, MCP lifecycle, and tool policy controller. */
+/** Host-side dsh 0.2 configuration, RPC, MCP lifecycle, and tool policy controller. */
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -83,7 +84,8 @@ interface ToolSchemaView {
 export class McpManagerController {
   private readonly runtimes = new Map<string, RuntimeState>()
   private readonly restrictions: AgentRestriction[] = []
-  private settingsWatchDispose: (() => void) | undefined
+  private configWatchDispose: (() => void) | undefined
+  private configPresentationDispose: (() => void) | undefined
   private rpcDispose: (() => Promise<void>) | undefined
   private guardDispose: (() => void) | undefined
   private mutationTail: Promise<void> = Promise.resolve()
@@ -98,19 +100,24 @@ export class McpManagerController {
    */
   constructor(private readonly ctx: HostContext, private readonly config: ManagerSettings) {}
 
-  /** Register the RPC channel, tool guard, settings watch, and initial servers. */
+  /** Register the RPC channel, tool guard, configuration watch, and servers. */
   async start(): Promise<void> {
-    // dsh 0.1.7 owns the document through the Loader entry: there is no
-    // settings.register() to subscribe to, and the Host announces every
-    // committed revision on 'settings/document-updated'. Another entry's
-    // write is none of this controller's business.
-    this.settingsWatchDispose = this.ctx.on('settings/document-updated', (ns) => {
-      if (String(ns) !== String(MANAGER_NAMESPACE)) return
-      if (this.disposed) return
+    validateStoredDocument(this.document())
+    // dsh 0.2 owns the document through the Loader entry. Volatile fields are
+    // committed into the running Config refs and announce their changed paths
+    // on the owning plugin fiber; another entry's update is not ours to load.
+    this.configWatchDispose = this.ctx.on('loader/volatile-update', (paths) => {
+      if (this.disposed || !paths.some(path => path[0] === 'servers' || path[0] === 'disabledTools')) return
       void this.reconcileAll().catch(error => {
-        this.ctx.logger.warn(`web-mcp-manager: settings change reconciliation failed: ${String(error)}`)
+        this.ctx.logger.warn(`web-mcp-manager: configuration change reconciliation failed: ${String(error)}`)
       })
     })
+    // The MCP panel is the purpose-built editor for this entry. Keep dsh's
+    // generic generated form off to avoid exposing a second server editor.
+    // The optional guard keeps lightweight controller test doubles compatible.
+    if (typeof this.ctx.settings.configure === 'function') {
+      this.configPresentationDispose = this.ctx.settings.configure({ auto: false })
+    }
     this.guardDispose = this.ctx.tools.guard((execution) => {
       const serverId = serverIdFromToolName(execution.name, Object.keys(this.document().servers))
       if (serverId === undefined) return undefined
@@ -128,7 +135,7 @@ export class McpManagerController {
       if (this.disposed || this.suppressRestrictionEvents) return
       this.refreshRestrictions()
     })
-    // 0.1.7 types this hook as returning the (absent) waterfall value.
+    // Keep the agent lifecycle hook's absent waterfall value explicit.
     this.ctx.on('agent/created', ({ agent }) => {
       this.installRestriction(agent)
       return undefined
@@ -144,8 +151,10 @@ export class McpManagerController {
   async dispose(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
-    this.settingsWatchDispose?.()
-    this.settingsWatchDispose = undefined
+    this.configWatchDispose?.()
+    this.configWatchDispose = undefined
+    this.configPresentationDispose?.()
+    this.configPresentationDispose = undefined
     await this.lifecycleQueues.drain()
     await this.mutationTail.catch(() => {})
     for (const runtime of this.runtimes.values()) await this.disposeRuntime(runtime)

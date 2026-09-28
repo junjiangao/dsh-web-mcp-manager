@@ -1,4 +1,4 @@
-/** Host-side settings, RPC, MCP lifecycle, and tool policy controller. */
+/** Host-side dsh 0.2 configuration, RPC, MCP lifecycle, and tool policy controller. */
 import type { Context } from '@deepseek-ai/cordis';
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection';
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver';
@@ -22,7 +22,8 @@ export declare class McpManagerController {
     private readonly config;
     private readonly runtimes;
     private readonly restrictions;
-    private settingsWatchDispose;
+    private configWatchDispose;
+    private configPresentationDispose;
     private rpcDispose;
     private guardDispose;
     private mutationTail;
@@ -35,7 +36,7 @@ export declare class McpManagerController {
      * them, so a committed edit is visible to the next operation.
      */
     constructor(ctx: HostContext, config: ManagerSettings);
-    /** Register the RPC channel, tool guard, settings watch, and initial servers. */
+    /** Register the RPC channel, tool guard, configuration watch, and servers. */
     start(): Promise<void>;
     /** Dispose RPC, tool policy, and all child MCP clients after operations drain. */
     dispose(): Promise<void>;

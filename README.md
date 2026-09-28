@@ -1,6 +1,6 @@
 # DSH Web MCP Manager
 
-MCP service management for the DeepSeek Harness Web profile. The plugin adds a **Settings → MCP** section for panel-managed servers, lifecycle actions, and per-tool enablement. State is stored in the Host `web-mcp-manager` settings namespace.
+MCP service management for the DeepSeek Harness Web profile. The plugin adds a **Settings → MCP** section for panel-managed servers, lifecycle actions, and per-tool enablement. State is stored in the Loader entry `Config` for `web-mcp-manager` and persisted through dsh's profile configuration layer.
 
 ## Install
 
@@ -36,12 +36,13 @@ dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager#main
 
 ## Compatibility
 
-Requires DeepSeek Harness `0.1.7-rc.1` or a later `0.1.x`. dsh 0.1.7 owns plugin
-configuration through the Loader entry, so this plugin exports `Config` from
-`src/settings.ts` as the form the settings page renders, declares every field
-`volatile()`, and writes back through `ctx.settings.replace()`. The removed
-`settings.register()` API and its `SettingsProvider`/`SettingsScope` types are no
-longer used, so earlier 0.1.x builds are not supported.
+Requires DeepSeek Harness `0.2.0-rc.1`. dsh 0.2 owns plugin configuration
+through the Loader entry, so this plugin exports `Config` from `src/settings.ts`
+as the form the settings page renders, declares every live field `volatile()`,
+and writes back through `ctx.settings.replace()`. The removed `settings.register()`
+API and its `SettingsProvider`/`SettingsScope` types are not used. Volatile
+changes arrive on the owning fiber through `loader/volatile-update`, allowing
+the running MCP clients to reconcile without remounting the manager.
 
 Revision conflicts carry the settings service's own identity. The controller
 raises `SettingsConflictError` for its fail-fast check and classifies that class
@@ -50,9 +51,9 @@ same wire code. The write itself stays on `replace()` rather than the
 path-addressed `settings.mutate()`: `mutate()` exists for a caller holding an
 incomplete (redacted) view of a namespace, whereas this controller reads the
 entry's volatile refs — the resolved config, secrets included — and therefore
-restates every server. `ctx.settings.configure({ auto: false })` is deliberately
-not called either: no shipped Web surface consumes `autoGenerate` yet, so it
-would be a no-op.
+restates every server. `ctx.settings.configure({ auto: false })` is used to keep
+the generic generated form off: the purpose-built Settings → MCP panel is the
+sole editor for this entry.
 
 The Host entry
 declares `webServer` in its injection set and registers its own authenticated
