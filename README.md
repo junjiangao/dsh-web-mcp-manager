@@ -36,7 +36,7 @@ dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager#main
 
 ## Compatibility
 
-Requires DeepSeek Harness `0.2.0-rc.1`. dsh 0.2 owns plugin configuration
+Requires DeepSeek Harness `0.2.x` (`0.2.0-rc.1` or later, prereleases included). dsh 0.2 owns plugin configuration
 through the Loader entry, so this plugin exports `Config` from `src/settings.ts`
 as the form the settings page renders, declares every live field `volatile()`,
 and writes back through `ctx.settings.replace()`. The removed `settings.register()`

@@ -36,7 +36,7 @@ dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager#main
 
 ## 兼容性
 
-需要 DeepSeek Harness `0.2.0-rc.1`。dsh 0.2 起，插件配置由 Loader entry
+需要 DeepSeek Harness `0.2.x`（`0.2.0-rc.1` 及以上，含预发布版）。dsh 0.2 起，插件配置由 Loader entry
 自身承载：本插件从 `src/settings.ts` 导出 `Config` 作为设置页渲染的表单，
 所有实时字段声明为 `volatile()`，并通过 `ctx.settings.replace()` 写回。已移除的
 `settings.register()` 及其 `SettingsProvider`/`SettingsScope` 类型不再使用。volatile
