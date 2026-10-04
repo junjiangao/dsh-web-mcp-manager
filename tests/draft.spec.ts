@@ -67,3 +67,36 @@ describe('MCP draft projection helpers', () => {
     }
   })
 })
+
+describe('MCP draft scope and template rows', () => {
+  it('carries the scope the editor targeted', () => {
+    // A new server takes the panel default; an existing one keeps its own scope.
+    expect(draftFromServer(undefined, 0, 'project').scope).toBe('project')
+    expect(draftPatch(draftFromServer(undefined, 0, 'project')).scope).toBe('project')
+    expect(draftFromServer(viewWithScope('user'), 0, 'project').scope).toBe('user')
+  })
+
+  it('never rewrites or clears a row whose value is an environment template', () => {
+    const draft = draftFromServer(viewWithTemplates())
+    const token = draft.env.find(entry => entry.key === 'TOKEN')
+    expect(token?.templated).toBe(true)
+    // Even after the row is deleted from the draft, the template survives.
+    const patch = draftPatch({ ...draft, env: [] })
+    expect(patch.env.TOKEN).toBeUndefined()
+    // And it is not reported as a managed sensitive key.
+    expect(patch.envSensitive).toEqual([])
+  })
+})
+
+function viewWithScope(scope: ManagedServerView['scope']): ManagedServerView {
+  return redactServer(
+    { ...defaultServer('demo'), command: 'node' }, 'loaded', 0, undefined, scope,
+  )
+}
+
+function viewWithTemplates(): ManagedServerView {
+  return redactServer(
+    { ...defaultServer('demo'), command: 'node', env: { TOKEN: '${env:TOKEN}' } },
+    'loaded', 0, undefined, 'user', [], { env: ['TOKEN'], headers: [] },
+  )
+}

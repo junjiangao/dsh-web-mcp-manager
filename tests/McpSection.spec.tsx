@@ -23,12 +23,15 @@ function view(overrides: Partial<ManagedServerView> = {}): ManagedServerView {
     reconnect: { enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 },
     status: 'loaded',
     toolCount: 0,
+    scope: 'profile',
+    shadowed: [],
+    templates: { env: [], headers: [] },
     ...overrides,
   }
 }
 
 function snapshot(revision: number, servers: ManagedServerView[] = []): Snapshot {
-  return { revision, writable: true, servers, tools: [], readonlyEntries: [] }
+  return { revision, writable: true, servers, tools: [], readonlyEntries: [], sources: [], workspaces: [] }
 }
 
 let api: ManagerClientApi
@@ -188,5 +191,78 @@ describe('McpSection conflict-safe editing', () => {
     renderPanel()
     await waitFor(() => expect(screen.getByText('enable')).toBeTruthy())
     expect(screen.getByText('disabled')).toBeTruthy()
+  })
+})
+
+describe('McpSection multi-scope surfaces', () => {
+  function makeApi(): ManagerClientApi {
+    return {
+      snapshot: vi.fn(),
+      upsertServer: vi.fn(),
+      removeServer: vi.fn(),
+      setServerEnabled: vi.fn(),
+      reloadServer: vi.fn(),
+      setToolEnabled: vi.fn(),
+    } as unknown as ManagerClientApi
+  }
+
+  it('badges the winning scope, marks shadowed definitions, and offers a migration', async () => {
+    api = makeApi()
+    api.snapshot.mockResolvedValue({
+      ...snapshot(3, [view({ scope: 'entry', shadowed: ['user'] })]),
+      sources: [
+        { scope: 'profile', path: '/home/profiles/web/mcp.json', writable: true, compat: false, exists: true, serverCount: 0 },
+        { scope: 'entry', path: 'cordis.patch.yml · web-mcp-manager', writable: true, compat: false, exists: true, serverCount: 1 },
+      ],
+    })
+    const { container } = renderPanel()
+    await waitFor(() => expect(screen.getByText('edit')).toBeTruthy())
+    expect(container.querySelector('[data-mcp-scope="entry"]')).not.toBeNull()
+    expect(container.querySelector('[data-mcp-shadowed="user"]')).not.toBeNull()
+    // The source rows carry path, state, and per-entry problems.
+    expect(container.querySelector('[data-mcp-source="profile"]')).not.toBeNull()
+    expect(screen.getByText('/home/profiles/web/mcp.json')).toBeTruthy()
+    fireEvent.click(screen.getByText('migrate'))
+    await waitFor(() => expect(api.upsertServer).toHaveBeenCalled())
+    const request = (api.upsertServer as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]
+    expect(request.scope).toBe('profile')
+  })
+
+  it('roots the project scope at the selected workspace and sends it with every request', async () => {
+    api = makeApi()
+    api.snapshot.mockResolvedValue({
+      ...snapshot(4, []),
+      workspaces: [{ id: 'w1', path: '/repo/one', title: 'one' }],
+    })
+    const { container } = renderPanel()
+    await waitFor(() => expect(container.querySelector('[data-mcp-project]')).not.toBeNull())
+    fireEvent.change(container.querySelector('[data-mcp-project]') as HTMLSelectElement, { target: { value: '/repo/one' } })
+    await waitFor(() => {
+      const calls = (api.snapshot as ReturnType<typeof vi.fn>).mock.calls
+      expect(calls.some(call => (call[0] as { projectPath?: string }).projectPath === '/repo/one')).toBe(true)
+    })
+    // A new server defaults to the project scope once a workspace is selected.
+    fireEvent.click(screen.getByText('add'))
+    await waitFor(() => expect(container.querySelector('[data-mcp-scope-select]')).not.toBeNull())
+    expect((container.querySelector('[data-mcp-scope-select]') as HTMLSelectElement).value).toBe('project')
+  })
+
+  it('keeps a templated secret row read-only instead of rewriting it', async () => {
+    api = makeApi()
+    const server = view({
+      env: { TOKEN: { set: true, sensitive: false } },
+      templates: { env: ['TOKEN'], headers: [] },
+    })
+    api.snapshot.mockResolvedValue(snapshot(6, [server]))
+    const { container } = renderPanel()
+    await waitFor(() => expect(screen.getByText('edit')).toBeTruthy())
+    fireEvent.click(screen.getByText('edit'))
+    await waitFor(() => expect(container.querySelector('form')).not.toBeNull())
+    expect(container.querySelector('[data-mcp-template="TOKEN"]')).not.toBeNull()
+    fireEvent.click(screen.getByText('save'))
+    await waitFor(() => expect(api.upsertServer).toHaveBeenCalled())
+    const request = (api.upsertServer as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { server: { env: Record<string, unknown> } }
+    // No clear, no value: the template in the file stays untouched.
+    expect(request.server.env.TOKEN).toBeUndefined()
   })
 })

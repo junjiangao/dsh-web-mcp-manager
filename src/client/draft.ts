@@ -6,7 +6,7 @@
  * can be tested without a browser.
  */
 
-import type { ManagedServerView, SecretInput, SecretState, ServerPatch } from '../types.ts'
+import type { ManagedServerView, McpScope, SecretInput, SecretState, ServerPatch } from '../types.ts'
 
 /**
  * HTML `pattern` for a server id. Browsers compile `pattern` attributes with
@@ -21,6 +21,8 @@ export interface ServerDraft {
   id: string
   /** Snapshot revision captured when the editor was opened; never re-read from polling. */
   baseRevision: number
+  /** Scope this write targets; `entry` means the legacy Loader-entry store. */
+  scope: McpScope
   label: string
   transport: 'stdio' | 'streamable-http'
   command: string
@@ -33,6 +35,9 @@ export interface ServerDraft {
   /** Keys present when the draft was opened; used to emit `{ clear: true }` for removed/renamed entries. */
   envOriginalKeys: readonly string[]
   headersOriginalKeys: readonly string[]
+  /** Keys whose stored value is a `${…}` template and must never be rewritten. */
+  envProtectedKeys: readonly string[]
+  headersProtectedKeys: readonly string[]
   reconnectEnabled: boolean
   initialDelayMs: string
   maxDelayMs: string
@@ -49,6 +54,12 @@ export interface SecretDraft {
   clear: boolean
   /** Mask the value as a password field (e.g. API keys); plain values stay visible. */
   sensitive: boolean
+  /**
+   * The stored value is a `${…}` template the Host resolves at mount time.
+   * Such a row is read-only here: the panel never received the value, and
+   * clearing or rewriting it would replace the template with a literal.
+   */
+  templated: boolean
 }
 
 let nextUid = 1
@@ -59,12 +70,13 @@ function allocateUid(): number {
   return uid
 }
 
-export function draftFromServer(server?: ManagedServerView, baseRevision = 0): ServerDraft {
-  const env = secretDrafts(server?.env)
-  const headers = secretDrafts(server?.headers)
+export function draftFromServer(server?: ManagedServerView, baseRevision = 0, defaultScope: McpScope = 'profile'): ServerDraft {
+  const env = secretDrafts(server?.env, server?.templates.env)
+  const headers = secretDrafts(server?.headers, server?.templates.headers)
   return {
     id: server?.id ?? '',
     baseRevision,
+    scope: server?.scope ?? defaultScope,
     label: server?.label ?? '',
     transport: server?.transport ?? 'stdio',
     command: server?.command ?? '',
@@ -76,6 +88,8 @@ export function draftFromServer(server?: ManagedServerView, baseRevision = 0): S
     headers,
     envOriginalKeys: env.map(entry => entry.key),
     headersOriginalKeys: headers.map(entry => entry.key),
+    envProtectedKeys: env.filter(entry => entry.templated).map(entry => entry.key),
+    headersProtectedKeys: headers.filter(entry => entry.templated).map(entry => entry.key),
     reconnectEnabled: server?.reconnect.enabled ?? true,
     initialDelayMs: String(server?.reconnect.initialDelayMs ?? 500),
     maxDelayMs: String(server?.reconnect.maxDelayMs ?? 30_000),
@@ -84,12 +98,20 @@ export function draftFromServer(server?: ManagedServerView, baseRevision = 0): S
 }
 
 export function newSecretDraft(): SecretDraft {
-  return { uid: allocateUid(), key: '', value: '', clear: false, sensitive: false }
+  return { uid: allocateUid(), key: '', value: '', clear: false, sensitive: false, templated: false }
 }
 
-export function secretDrafts(value?: Readonly<Record<string, SecretState>>): SecretDraft[] {
+export function secretDrafts(
+  value?: Readonly<Record<string, SecretState>>,
+  templated: readonly string[] = [],
+): SecretDraft[] {
+  const templates = new Set(templated)
   return Object.keys(value ?? {}).sort((a, b) => a.localeCompare(b))
-    .map(key => ({ uid: allocateUid(), key, originalKey: key, value: '', clear: false, sensitive: value?.[key]?.sensitive ?? false }))
+    .map(key => ({
+      uid: allocateUid(), key, originalKey: key, value: '', clear: false,
+      sensitive: value?.[key]?.sensitive ?? false,
+      templated: templates.has(key),
+    }))
 }
 
 export function draftPatch(draft: ServerDraft): ServerPatch {
@@ -99,14 +121,15 @@ export function draftPatch(draft: ServerDraft): ServerPatch {
   const maxAttempts = positiveIntegerOr(draft.maxAttempts, 10)
   return {
     id: draft.id.trim(),
+    scope: draft.scope,
     label: draft.label,
     transport: draft.transport,
     command: draft.command,
     args: [...draft.args],
     cwd: draft.cwd,
     url: draft.url,
-    env: secretPatch(draft.env, draft.envOriginalKeys),
-    headers: secretPatch(draft.headers, draft.headersOriginalKeys),
+    env: secretPatch(draft.env, draft.envOriginalKeys, draft.envProtectedKeys),
+    headers: secretPatch(draft.headers, draft.headersOriginalKeys, draft.headersProtectedKeys),
     envSensitive: sensitiveKeys(draft.env),
     headerSensitive: sensitiveKeys(draft.headers),
     toolCallTimeoutMs: Number.isSafeInteger(timeout) && timeout > 0 ? timeout : 60_000,
@@ -122,13 +145,21 @@ export function draftPatch(draft: ServerDraft): ServerPatch {
  * Host merge actually deletes them. Renamed rows clear the original key and
  * set the new one.
  */
-export function secretPatch(entries: readonly SecretDraft[], originalKeys: readonly string[]): Record<string, SecretInput> {
+export function secretPatch(
+  entries: readonly SecretDraft[],
+  originalKeys: readonly string[],
+  protectedKeys: readonly string[] = [],
+): Record<string, SecretInput> {
   const result: Record<string, SecretInput> = {}
+  const protectedSet = new Set(protectedKeys)
   const removed = new Set(originalKeys)
   for (const entry of entries) {
     const key = entry.key.trim()
     if (key.length === 0) continue
+    // A templated row is present but not ours to write: mark the key as still
+    // accounted for so it is never emitted as a clear.
     removed.delete(key)
+    if (entry.templated) continue
     if (entry.originalKey !== undefined && entry.originalKey !== key) {
       setOwn(result, entry.originalKey, { clear: true })
     }
@@ -138,12 +169,16 @@ export function secretPatch(entries: readonly SecretDraft[], originalKeys: reado
       setOwn(result, key, entry.value)
     }
   }
-  for (const key of removed) setOwn(result, key, { clear: true })
+  // A protected key is never cleared: the file owns that template, not the panel.
+  for (const key of removed) if (!protectedSet.has(key)) setOwn(result, key, { clear: true })
   return result
 }
 
 export function sensitiveKeys(entries: readonly SecretDraft[]): string[] {
-  const keys = entries.filter(entry => entry.sensitive).map(entry => entry.key.trim()).filter(Boolean)
+  const keys = entries
+    .filter(entry => entry.sensitive && !entry.templated)
+    .map(entry => entry.key.trim())
+    .filter(Boolean)
   return [...new Set(keys)]
 }
 

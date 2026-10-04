@@ -1,6 +1,41 @@
 # DSH Web MCP Manager
 
-MCP service management for the DeepSeek Harness Web profile. The plugin adds a **Settings → MCP** section for panel-managed servers, lifecycle actions, and per-tool enablement. State is stored in the Loader entry `Config` for `web-mcp-manager` and persisted through dsh's profile configuration layer.
+MCP service management for the DeepSeek Harness Web profile. The plugin adds a **Settings → MCP** section for panel-managed servers, lifecycle actions, and per-tool enablement. Server definitions live in `mcp.json` files; the per-tool policy lives in the Loader entry `Config` for `web-mcp-manager`.
+
+## Server sources
+
+One server name resolves to the highest-precedence definition; the rest are reported as *shadowed* rather than dropped.
+
+| Scope | Path | Notes |
+|---|---|---|
+| project | `<workspace>/.dsh/mcp.json` | selected in the panel from the workspace registry; validated Host-side, so the RPC can never write outside a registered root |
+| project (compat) | `<workspace>/.mcp.json` | Claude Code's file, read-only, ranks just below the project scope |
+| profile | `~/.dsh/profiles/<profile>/mcp.json` | the default target for a new server |
+| user | `~/.dsh/mcp.json` | honours `$DSH_HOME` |
+| entry (legacy) | the `web-mcp-manager` Loader entry's `Config.servers` | what earlier versions stored; shown read-only with a **Migrate to mcp.json** action |
+
+The file format is the one the surrounding ecosystem already uses, so the same file works in Claude Code, Codex, pi, VS Code, and Codebuddy:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "${env:GITHUB_TOKEN}" }
+    },
+    "web": { "type": "http", "url": "https://example.com/mcp" }
+  }
+}
+```
+
+- Reads are wider than writes: VS Code's `servers` alias, `http` / `streamableHttp` spellings, and `enabled` / `disabled` are all accepted, and every field this plugin does not own round-trips untouched.
+- `${env:NAME}`, `${NAME}`, and `${NAME:-fallback}` expand **only** on the way into `dsh-mcp-client`; the panel never receives the value, the file keeps the template, and a missing variable becomes a failure that names it.
+- A panel-managed secret is declared with `"sensitive": { "env": ["GITHUB_TOKEN"] }`; without it, a key that looks like a secret is masked by name.
+- SSE is refused with a clear message rather than silently downgraded, because `dsh-mcp-client` supports `stdio` and `streamable-http` only.
+- Writes take the official cross-process file lock and commit through an atomic rename at mode `0600`; a file with a JSON syntax error refuses the write instead of being overwritten, and only that one scope reports the error.
+- Every scope file is watched, so editing `~/.dsh/mcp.json` in an editor reconciles the running servers without a restart.
 
 ## Install
 
@@ -117,4 +152,5 @@ Do not add a `prepare` or `postinstall` build hook to this repository. GitHub in
 - Both `stdio` and `streamable-http` use the Host `@deepseek-ai/dsh-mcp-client`.
 - MCP commands run outside the Host sandbox and are trusted executables explicitly configured by the user.
 - MCP entries supplied by another Loader or agent-preset configuration are displayed read-only and are not migrated or edited.
+- A per-tool disable list is profile-local policy, not portable server definition: it stays in the Loader entry `Config` (keyed by server id) and is never written into a shared `mcp.json`.
 - `Loaded` means that this load and tool synchronization completed; it is not a promise of permanent connection health.

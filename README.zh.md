@@ -1,6 +1,41 @@
 # DSH Web MCP Manager
 
-DeepSeek Harness Web profile 的 MCP 服务管理插件。它在“设置 → MCP”提供面板自管服务的配置、启停、重载和工具开关；配置保存在 `web-mcp-manager` Loader 条目的 `Config` 中，并由 dsh profile 配置层持久化。
+DeepSeek Harness Web profile 的 MCP 服务管理插件。它在“设置 → MCP”提供面板自管服务的配置、启停、重载和工具开关；服务定义存放在 `mcp.json` 文件里；逐工具策略保存在 `web-mcp-manager` Loader 条目的 `Config` 中，并由 dsh profile 配置层持久化。
+
+## 服务来源
+
+同名服务由优先级最高的定义生效，其余定义在面板中标注为“被上层覆盖”，不会被静默丢弃。
+
+| 级别 | 路径 | 说明 |
+|---|---|---|
+| 项目级 | `<workspace>/.dsh/mcp.json` | 面板从工作区注册表中选择；Host 侧再次校验，RPC 无法写到未注册的目录 |
+| 项目级兼容 | `<workspace>/.mcp.json` | Claude Code 约定，只读，优先级仅低于项目级自身文件 |
+| 配置级 | `~/.dsh/profiles/<profile>/mcp.json` | 新建服务的默认落点 |
+| 用户级 | `~/.dsh/mcp.json` | 尊重 `$DSH_HOME` |
+| 遗留层 | Loader entry `web-mcp-manager` 的 `Config.servers` | 早期版本的存储位置，只读展示并提供「迁移到 mcp.json」 |
+
+文件格式与周边生态一致，同一份文件可被 Claude Code、Codex、pi、VS Code、Codebuddy 直接读取：
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "${env:GITHUB_TOKEN}" }
+    },
+    "web": { "type": "http", "url": "https://example.com/mcp" }
+  }
+}
+```
+
+- 读宽写严：接受 VS Code 的 `servers` 别名、`http` / `streamableHttp` 等传输写法与 `enabled` / `disabled`；本插件不拥有的字段在往返写入中原样保留。
+- `${env:NAME}`、`${NAME}`、`${NAME:-fallback}` **只在**投影给 `dsh-mcp-client` 时展开：面板永远拿不到值，文件里保留模板，变量缺失会变成指名道姓的失败。
+- 面板管理的密钥用 `"sensitive": { "env": ["GITHUB_TOKEN"] }` 声明；未声明时按名称识别并掩码。
+- SSE 会给出明确错误而不是静默降级 —— `dsh-mcp-client` 只支持 `stdio` 与 `streamable-http`。
+- 写入使用官方跨进程文件锁并以原子 rename 提交（权限 `0600`）；JSON 语法损坏的文件会被拒绝覆盖，且只有该层报错，其余层照常工作。
+- 每个来源文件都被监听：用编辑器改 `~/.dsh/mcp.json` 后无需重启即可重新协调。
 
 ## 安装
 
@@ -103,4 +138,5 @@ pnpm run build
 - `stdio` 和 `streamable-http` 均由宿主的 `@deepseek-ai/dsh-mcp-client` 管理。
 - MCP 命令在宿主进程外启动，属于用户明确配置的受信任可执行程序。
 - 已由其他 Loader 或 Agent 预设配置提供的 MCP 条目仅展示，不会被插件迁移或修改。
+- 逐工具开关是本 profile 的策略而非可移植的服务定义：它只存在 Loader 条目 `Config`（按 server id 索引），不会写入共享的 `mcp.json`。
 - “已加载”表示本次加载及工具同步完成，不等同于永久连接健康状态。

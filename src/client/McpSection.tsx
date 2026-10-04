@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ManagedServerView, ManagedToolView, ReadonlyMcpEntry, SecretInput, Snapshot } from '../types.ts'
+import type { ManagedServerView, ManagedToolView, McpScope, ReadonlyMcpEntry, SecretInput, Snapshot } from '../types.ts'
 import { PLUGIN_IDENTITY } from '../types.ts'
 import { McpManagerRpcError, type ManagerClientApi } from './api.ts'
 import type { McpLocaleKey } from './locales.ts'
@@ -137,6 +137,14 @@ const chipBase: React.CSSProperties = {
   border: '1px solid',
   borderRadius: RADIUS_CTRL,
 }
+
+/** Localized label per source scope. */
+const SCOPE_KEYS = {
+  project: 'scopeProject',
+  profile: 'scopeProfile',
+  user: 'scopeUser',
+  entry: 'scopeEntry',
+} as const
 
 function sourceChip(source: ReadonlyMcpEntry['source']): React.CSSProperties {
   return source === 'loader'
@@ -410,6 +418,7 @@ const readonlyStatusStyle: React.CSSProperties = { color: COLORS.textTertiary, f
  */
 function useVisiblePolling(
   api: ManagerClientApi,
+  projectPath: string | undefined,
   onSnapshot: (snapshot: Snapshot, seq: number) => void,
   onError: (error: unknown, seq: number) => void,
   nextSeq: () => number,
@@ -422,7 +431,7 @@ function useVisiblePolling(
       if (document.visibilityState !== 'visible' || inFlight) return
       inFlight = true
       const seq = nextSeq()
-      void api.snapshot({}, controller.signal).then(
+      void api.snapshot({ projectPath }, controller.signal).then(
         snapshot => onSnapshot(snapshot, seq),
         error => onError(error, seq),
       ).finally(() => { inFlight = false })
@@ -451,7 +460,7 @@ function useVisiblePolling(
       stop()
       document.removeEventListener('visibilitychange', visibility)
     }
-  }, [api, onError, onSnapshot, nextSeq])
+  }, [api, onError, onSnapshot, nextSeq, projectPath])
 }
 
 export function McpSection({ api, t }: McpSectionProps): ReactNode {
@@ -461,6 +470,8 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | undefined>()
   const [pollFailed, setPollFailed] = useState(false)
+  /** Registered workspace the project scope is rooted at; `undefined` = none. */
+  const [projectPath, setProjectPath] = useState<string | undefined>()
 
   // Scoped stylesheet for states inline styles cannot express; injected once per document.
   useEffect(() => {
@@ -503,7 +514,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
     setMessage(message)
   }, [t])
 
-  useVisiblePolling(api, accept, rejectPoll, nextSeq)
+  useVisiblePolling(api, projectPath, accept, rejectPoll, nextSeq)
 
   const snapshot = state.status === 'ready' ? state.snapshot : undefined
   const normalizedQuery = query.trim().toLocaleLowerCase()
@@ -516,6 +527,30 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
     if (normalizedQuery.length === 0) return true
     return `${tool.name} ${tool.description}`.toLocaleLowerCase().includes(normalizedQuery)
   }) ?? [], [normalizedQuery, snapshot])
+
+  /**
+   * Scope a new server is written to: the project scope once the user selected
+   * a workspace, otherwise the profile's own file.
+   */
+  const defaultScope: McpScope = projectPath === undefined ? 'profile' : 'project'
+
+  /** Copy a legacy entry-scope server into the writable scope for this session. */
+  const migrate = (server: ManagedServerView): void => {
+    if (snapshot === undefined) return
+    void run(() => api.upsertServer({
+      scope: defaultScope,
+      projectPath,
+      expectedRevision: snapshot.revision,
+      server: {
+        id: server.id, label: server.label, enabled: server.enabled, transport: server.transport,
+        command: server.command, args: [...server.args], cwd: server.cwd, url: server.url,
+        env: Object.fromEntries(Object.keys(server.env).map(key => [key, { clear: true }])),
+        headers: Object.fromEntries(Object.keys(server.headers).map(key => [key, { clear: true }])),
+        envSensitive: [], headerSensitive: [],
+        toolCallTimeoutMs: server.toolCallTimeoutMs, reconnect: { ...server.reconnect },
+      },
+    }))
+  }
 
   const run = async (operation: () => Promise<Snapshot>): Promise<Snapshot | undefined> => {
     setBusy(true)
@@ -541,7 +576,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
       return
     }
     const patch = draftPatch(draft)
-    const next = await run(() => api.upsertServer({ server: patch, expectedRevision: draft.baseRevision }))
+    const next = await run(() => api.upsertServer({ server: patch, expectedRevision: draft.baseRevision, projectPath }))
     if (next !== undefined) setDraft(undefined)
   }
 
@@ -555,12 +590,12 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
 
   const toggleServer = (server: ManagedServerView): void => {
     if (snapshot === undefined) return
-    void run(() => api.setServerEnabled({ id: server.id, enabled: !server.enabled, expectedRevision: snapshot.revision }))
+    void run(() => api.setServerEnabled({ id: server.id, enabled: !server.enabled, expectedRevision: snapshot.revision, projectPath }))
   }
 
   const remove = (server: ManagedServerView): void => {
     if (snapshot === undefined || !window.confirm(t('confirmRemove'))) return
-    void run(() => api.removeServer({ id: server.id, expectedRevision: snapshot.revision }))
+    void run(() => api.removeServer({ id: server.id, expectedRevision: snapshot.revision, projectPath }))
   }
 
   const reload = (server: ManagedServerView): void => { void run(() => api.reloadServer({ id: server.id })) }
@@ -572,8 +607,8 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
       <header style={headerStyle}>
         <div style={headerRowStyle}>
           <h2 style={titleStyle}>{t('title')}</h2>
-          <button type="button" data-variant="primary" style={buttonPrimaryStyle} onClick={() => setDraft(draftFromServer(undefined, snapshot?.revision ?? 0))} disabled={busy || snapshot?.writable === false}>{t('add')}</button>
-          <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => { if (snapshot !== undefined) void run(() => api.snapshot({})) }} disabled={busy}>{t('refresh')}</button>
+          <button type="button" data-variant="primary" style={buttonPrimaryStyle} onClick={() => setDraft(draftFromServer(undefined, snapshot?.revision ?? 0, defaultScope))} disabled={busy || snapshot?.writable === false}>{t('add')}</button>
+          <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => { if (snapshot !== undefined) void run(() => api.snapshot({ projectPath })) }} disabled={busy}>{t('refresh')}</button>
         </div>
         <div style={subtitleRowStyle}>
           <span style={metaLabelStyle}>{t('pluginId')}</span>
@@ -584,6 +619,33 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
         <span style={fieldLabelStyle}>{t('search')}</span>
         <input type="search" style={searchInputStyle} value={query} onChange={event => setQuery(event.currentTarget.value)} placeholder={t('searchHint')} />
       </label>
+      {snapshot !== undefined && (snapshot.workspaces ?? []).length > 0 ? <label style={searchLabelStyle}>
+        <span style={fieldLabelStyle}>{t('project')}</span>
+        <select
+          data-mcp-project=""
+          style={fieldInputStyle}
+          value={projectPath ?? ''}
+          onChange={event => setProjectPath(event.currentTarget.value === '' ? undefined : event.currentTarget.value)}
+        >
+          <option value="">{t('projectNone')}</option>
+          {(snapshot.workspaces ?? []).map(workspace => <option key={workspace.id} value={workspace.path}>{workspace.title} — {workspace.path}</option>)}
+        </select>
+        {projectPath !== undefined ? <p style={hintStyle}>{t('projectHint')}</p> : null}
+      </label> : null}
+      {snapshot !== undefined ? <details style={readonlyDetailsStyle} data-mcp-sources="">
+        <summary style={summaryStyle}>{t('sources')} ({(snapshot.sources ?? []).length})</summary>
+        {(snapshot.sources ?? []).map(source => <div key={`${source.scope}:${source.path}`} style={readonlyItemStyle} data-mcp-source={source.scope}>
+          <div style={readonlyHeaderRowStyle}>
+            <span style={metaTagStyle}>{t(SCOPE_KEYS[source.scope])}{source.compat ? ` · ${t('sourceCompat')}` : ''}</span>
+            <code style={codeCaptionStyle}>{source.path}</code>
+            <span style={toolCountChipStyle}>{source.serverCount} {t('serverCount')}</span>
+            <span style={readonlyStatusStyle}>{source.exists ? (source.writable ? t('sourceWritable') : t('sourceReadonly')) : t('sourceMissing')}</span>
+          </div>
+          {source.error !== undefined ? <p role="alert" style={errorBoxStyle}>{source.error}</p> : null}
+          {source.problems !== undefined ? source.problems.map(problem =>
+            <p key={problem.id} role="alert" style={errorBoxStyle}>{problem.id}: {problem.error}</p>) : null}
+        </div>)}
+      </details> : null}
       {message !== undefined ? <p role={isConflictMessage ? 'status' : 'alert'} style={isConflictMessage ? noticeBoxStyle : errorBoxStyle}>
         {message}
         {isConflictMessage && draft !== undefined
@@ -603,13 +665,14 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
           t={t}
           busy={busy}
           writable={snapshot?.writable ?? false}
-          onEdit={() => setDraft(draftFromServer(server, snapshot?.revision ?? 0))}
+          onEdit={() => setDraft(draftFromServer(server, snapshot?.revision ?? 0, defaultScope))}
           onToggle={() => { toggleServer(server) }}
           onReload={() => { reload(server) }}
           onRemove={() => { remove(server) }}
+          onMigrate={() => { migrate(server) }}
           onToolToggle={(tool, enabled) => {
             if (snapshot === undefined) return
-            void run(() => api.setToolEnabled({ serverId: server.id, name: tool.name, enabled, expectedRevision: snapshot.revision }))
+            void run(() => api.setToolEnabled({ serverId: server.id, name: tool.name, enabled, expectedRevision: snapshot.revision, projectPath }))
           }}
         />
       ))}
@@ -620,6 +683,12 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
             <legend style={legendStyle}>{t('basic')}</legend>
             <Field label={t('id')}><input style={fieldInputStyle} required pattern={SERVER_ID_PATTERN} value={draft.id} disabled={snapshot?.servers.some(server => server.id === draft.id)} onChange={event => setDraft({ ...draft, id: event.currentTarget.value })} /></Field>
             <Field label={t('label')}><input style={fieldInputStyle} value={draft.label} onChange={event => setDraft({ ...draft, label: event.currentTarget.value })} /></Field>
+            <Field label={t('scope')}>
+              <select data-mcp-scope-select="" style={fieldInputStyle} value={draft.scope} onChange={event => setDraft({ ...draft, scope: event.currentTarget.value as ServerDraft['scope'] })}>
+                {(['project', 'profile', 'user', 'entry'] as const).map(scope =>
+                  <option key={scope} value={scope} disabled={scope === 'project' && projectPath === undefined}>{t(SCOPE_KEYS[scope])}</option>)}
+              </select>
+            </Field>
             <Field label={t('transport')}>
               <select style={fieldInputStyle} value={draft.transport} onChange={event => setDraft({ ...draft, transport: event.currentTarget.value as ServerDraft['transport'] })}>
                 <option value="stdio">{t('stdio')}</option>
@@ -690,7 +759,14 @@ function SecretFields({ label, entries, t, onChange }: SecretFieldsProps): React
   return <fieldset style={groupFieldsetStyle}>
     <legend style={legendStyle}>{label}</legend>
     <p style={hintStyle}>{t('secretHint')}</p>
-    {entries.map((entry, index) => <div key={entry.uid} style={secretRowStyle}>
+    {entries.map((entry, index) => entry.templated
+      // A `${...}` template lives in the file and is resolved by the Host at
+      // mount time; the panel never received its value and must not rewrite it.
+      ? <div key={entry.uid} style={secretRowStyle} data-mcp-template={entry.key}>
+        <Field label={t('secretKey')} style={secretFieldStyle}><input style={fieldInputStyle} value={entry.key} readOnly /></Field>
+        <p style={hintStyle} data-mcp-template-hint="">{t('secretTemplate')}</p>
+      </div>
+      : <div key={entry.uid} style={secretRowStyle}>
       <Field label={t('secretKey')} style={secretFieldStyle}><input style={fieldInputStyle} value={entry.key} onChange={event => {
         const next = [...entries]
         next[index] = { ...entry, key: event.currentTarget.value }
@@ -750,10 +826,11 @@ interface ServerCardProps {
   onToggle: () => void
   onReload: () => void
   onRemove: () => void
+  onMigrate: () => void
   onToolToggle: (tool: ManagedToolView, enabled: boolean) => void
 }
 
-function ServerCard({ server, tools, t, busy, writable, onEdit, onToggle, onReload, onRemove, onToolToggle }: ServerCardProps): ReactNode {
+function ServerCard({ server, tools, t, busy, writable, onEdit, onToggle, onReload, onRemove, onMigrate, onToolToggle }: ServerCardProps): ReactNode {
   const tone = STATUS_TONES[server.status]
   const target = server.transport === 'stdio' ? server.command : server.url
   return <article data-mcp-server={server.id} style={cardStyle}>
@@ -764,6 +841,10 @@ function ServerCard({ server, tools, t, busy, writable, onEdit, onToggle, onRelo
       </span>
       <strong style={cardTitleStyle}>{server.label}</strong>
       <code style={codeCaptionStyle}>{server.id}</code>
+      <span data-mcp-scope={server.scope} style={metaTagStyle}>{t(SCOPE_KEYS[server.scope])}</span>
+      {server.shadowed.length > 0
+        ? <span data-mcp-shadowed={server.shadowed.join(',')} style={metaTagStyle} title={server.shadowed.map(scope => t(SCOPE_KEYS[scope])).join(', ')}>{t('shadowed')}</span>
+        : null}
       <span style={toolCountChipStyle}>{server.toolCount} {t('toolCount')}</span>
     </div>
     <div style={metaLineStyle}>
@@ -775,6 +856,9 @@ function ServerCard({ server, tools, t, busy, writable, onEdit, onToggle, onRelo
       <button type="button" data-variant="primary" style={buttonPrimaryStyle} onClick={onEdit} disabled={busy || !writable}>{t('edit')}</button>
       <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={onToggle} disabled={busy || !writable}>{server.enabled ? t('disable') : t('enable')}</button>
       <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={onReload} disabled={busy}>{t('reload')}</button>
+      {server.scope === 'entry'
+        ? <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={onMigrate} disabled={busy || !writable}>{t('migrate')}</button>
+        : null}
       <button type="button" data-variant="danger" style={{ ...buttonDangerStyle, marginInlineStart: 'auto' }} onClick={onRemove} disabled={busy || !writable}>{t('remove')}</button>
     </div>
     <details style={collapseStyle}>

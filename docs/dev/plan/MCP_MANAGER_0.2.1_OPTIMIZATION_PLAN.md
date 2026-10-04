@@ -1,6 +1,20 @@
 # dsh-web-mcp-manager 优化调整方案（对齐 dsh 0.2.1-alpha.1）
 
-- 仓库：`/work/Repos/github/dsh-web-mcp-manager`（HEAD `4b18adf`，分支 `integrate-dsh-0.2`，工作区干净）
+> **落地状态（2026-10-04）**
+>
+> | 批次 | 状态 | 说明 |
+> | --- | --- | --- |
+> | P0-1 官方 `connection.fetch` 传输层 | ✅ 已落地 | `src/host/rpc-channel.ts`；`rpc-route.ts` 与 `tests/rpc-route.spec.ts` 已删除 |
+> | P0-2/3 依赖与版本 | ✅ 已落地 | peer 20 → **14**（含 P1 新增 2 个），`dependencies` 归零，devDeps 升到 0.2.1-alpha.1 |
+> | P0-4 升级兼容守卫 | ✅ 已落地 | `scripts/check-dsh-compat.mjs`、`tests/dependency-surface.spec.ts`、CI 双版本检查 |
+> | P1a `mcp.json` 核心 | ✅ 已落地 | `mcp-json.ts` / `mcp-file.ts` / `mcp-sources.ts` / `interpolate.ts` + controller/protocol 接入 |
+> | P1b 面板 | ✅ 已落地 | 层级徽标、遮盖标注、来源列表、工作区选择、模板只读行、迁移按钮 |
+> | P2 UI 基元 / 官方 `configForms` | ⏳ 未开始 | 见第 6 节 |
+>
+> 验收：`pnpm typecheck` 通过；**86 个用例 / 12 个文件**全绿；`pnpm build` 幂等且 `lib/` 已提交；
+> `pnpm check:compat` 对 `0.2.0-rc.1` 与 `0.2.1-alpha.1` 均通过。
+
+- 仓库：`/work/Repos/github/dsh-web-mcp-manager`（分支 `integrate-dsh-0.2`）
 - 插件版本：`@junjiangao/dsh-web-mcp-manager@0.3.1`
 - 对照运行时：DeepSeek Harness **0.2.1-alpha.1.20261004.2**（本机唯一安装版本，`~/.dsh/profiles/desktop` 正在使用）
 - 核查日期：2026-10-04
