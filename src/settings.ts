@@ -7,9 +7,10 @@ import type { SettingsNamespace as DshSettingsNamespace } from '@deepseek-ai/dsh
 import type {
   ReconnectPolicy, ServerTransport, SettingsDocument, StoredReconnectPolicy, StoredServer,
 } from './types.ts'
+import { MCP_MANAGER_NAMESPACE } from './types.ts'
 import { validateMcpConfig } from './host/mcp-config.ts'
 
-export const MANAGER_NAMESPACE = 'web-mcp-manager' as DshSettingsNamespace
+export const MANAGER_NAMESPACE = MCP_MANAGER_NAMESPACE as DshSettingsNamespace
 
 /**
  * Largest delay Node schedules without clamping it to one millisecond.

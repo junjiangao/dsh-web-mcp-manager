@@ -8,10 +8,10 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { PluginInventorySnapshot } from '@deepseek-ai/dsh-host-plugin-inventory'
 import { apply as mcpApply, Config as McpConfig } from '@deepseek-ai/dsh-mcp-client'
-import { SettingsConflictError, type SettingsForms } from '@deepseek-ai/dsh-settings'
+import type { SettingsForms } from '@deepseek-ai/dsh-settings'
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import type {
-  ManagedServerView, ManagedToolView, McpScope, McpSourceView, ReadonlyMcpEntry, RpcError, RpcResult,
+  ManagedServerView, ManagedToolView, McpScope, McpSourceView, ReadonlyMcpEntry, RemoveServerRequest, RpcError, RpcResult,
   ScopeTarget, SettingsDocument, Snapshot, SnapshotRequest, StoredServer, UpsertServerRequest, WorkspaceView,
 } from '../types.ts'
 import {
@@ -20,9 +20,8 @@ import {
   type ManagerRpcEndpoint,
   type ReloadServerRequest,
   type SetServerEnabledRequest,
-  type SetToolEnabledRequest,
 } from '../types.ts'
-import { MANAGER_NAMESPACE, validateStoredDocument, type ManagerSettings } from '../settings.ts'
+import { validateStoredDocument, type ManagerSettings } from '../settings.ts'
 import { toMcpConfig } from './mcp-config.ts'
 import { PerKeyQueue } from './keyed-queue.ts'
 import { registerManagerRpcRoute } from './rpc-channel.ts'
@@ -38,12 +37,19 @@ import {
   parseReloadRequest,
   parseSetEnabledRequest,
   parseSnapshotRequest,
-  parseToolRequest,
   parseUpsertRequest,
   projectTool,
   redactServer,
   serverIdFromToolName,
 } from '../protocol.ts'
+
+/**
+ * One message for every attempt to write the legacy entry scope through this
+ * RPC. The entry is a Loader entry's own configuration, so the browser writes
+ * it through the shared settings form, which fences the change with the
+ * official revision and never restates a secret it did not receive.
+ */
+const ENTRY_SCOPE_REFUSED = 'the entry scope is written through the settings form, not the manager RPC'
 
 const MCP_PLUGIN = {
   name: 'mcp-client',
@@ -86,8 +92,9 @@ interface ToolSchemaView {
 
 /**
  * The controller deliberately owns no browser state. Server definitions live in
- * the `mcp.json` scope files (or, for legacy installs, the Loader entry's
- * `Config`); the settings provider is the source of truth for the per-tool
+ * the `mcp.json` scope files; a legacy Loader-entry definition is read from the
+ * entry's volatile refs and written by the browser through the official shared
+ * settings form; the settings document is the source of truth for the per-tool
  * policy. Every operation re-resolves the sources, then reconciles only the
  * affected server's Cordis child Fiber.
  */
@@ -99,7 +106,6 @@ export class McpManagerController {
   private fileWatchDispose: (() => void) | undefined
   private rpcDispose: (() => Promise<void>) | undefined
   private guardDispose: (() => void) | undefined
-  private mutationTail: Promise<void> = Promise.resolve()
   private readonly lifecycleQueues = new PerKeyQueue()
   private suppressRestrictionEvents = false
   private disposed = false
@@ -176,7 +182,6 @@ export class McpManagerController {
     this.fileWatchDispose?.()
     this.fileWatchDispose = undefined
     await this.lifecycleQueues.drain()
-    await this.mutationTail.catch(() => {})
     for (const runtime of this.runtimes.values()) await this.disposeRuntime(runtime)
     this.runtimes.clear()
     for (const restriction of this.restrictions.splice(0)) restriction.dispose()
@@ -202,8 +207,6 @@ export class McpManagerController {
           return success(await this.setEnabled(parseSetEnabledRequest(payload)))
         case 'reloadServer':
           return success(await this.reload(parseReloadRequest(payload)))
-        case 'setToolEnabled':
-          return success(await this.setTool(parseToolRequest(payload)))
         default:
           return failure('bad-request', `unknown MCP manager endpoint ${JSON.stringify(endpoint)}`)
       }
@@ -215,23 +218,11 @@ export class McpManagerController {
   /** The live entry document, read through the volatile refs on every call. */
   private document(): SettingsDocument {
     // Detached from the refs: schemastery projects a deeply-readonly value,
-    // while the document this controller builds and writes back is mutable.
+    // while the document this controller reads is mutable.
     return structuredClone({
       servers: this.config.servers.get() ?? {},
       disabledTools: this.config.disabledTools.get() ?? {},
     }) as SettingsDocument
-  }
-
-  private revision(): number {
-    const descriptor = this.ctx.settings.describe({ redactSecrets: false })
-      .find(entry => String(entry.ns) === String(MANAGER_NAMESPACE))
-    return descriptor?.revision ?? 0
-  }
-
-  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const task = this.mutationTail.then(operation)
-    this.mutationTail = task.then(() => undefined, () => undefined)
-    return task
   }
 
   // ---------------------------------------------------------------- sources
@@ -330,15 +321,23 @@ export class McpManagerController {
    * private to this profile and always writable. A deployment without a profile
    * directory (or without that scope) degrades to the user scope rather than
    * failing the write.
+   *
+   * The entry scope is never a destination here: it is not a file but the
+   * Loader entry's own configuration, whose only writer is the official shared
+   * settings form the browser drives. A request that names it — or that would
+   * inherit it from a legacy definition — is refused rather than answered with
+   * a second, unfenced write path.
    */
   private writeScope(target: ScopeTarget, existing: SourcedServer | undefined, requested?: McpScope): McpScope {
     const projectDir = this.projectDir(target)
-    const available = (scope: McpScope): boolean => scope === 'entry' || this.scopeFile(scope, projectDir) !== undefined
+    const available = (scope: McpScope): boolean => scope !== 'entry' && this.scopeFile(scope, projectDir) !== undefined
     const explicit = requested ?? target.scope
+    if (explicit === 'entry') throw new TypeError(ENTRY_SCOPE_REFUSED)
+    if (explicit === undefined && existing?.scope === 'entry') throw new TypeError(ENTRY_SCOPE_REFUSED)
     const preferred = explicit ?? existing?.scope ?? 'profile'
     if (available(preferred)) return preferred
     if (explicit !== undefined) throw new Error(`the ${JSON.stringify(explicit)} scope is not available in this profile`)
-    for (const fallback of ['profile', 'user', 'entry'] as const) if (available(fallback)) return fallback
+    for (const fallback of ['profile', 'user'] as const) if (available(fallback)) return fallback
     throw new Error('no writable MCP scope is available in this profile')
   }
 
@@ -358,89 +357,43 @@ export class McpManagerController {
   // ------------------------------------------------------------- mutations
 
   private async upsert(request: UpsertServerRequest): Promise<Snapshot> {
-    return this.enqueueMutation(async () => {
-      const merged = await this.sourcesFor(request)
-      const existing = merged.servers.find(server => server.id === request.server.id)
-      const scope = this.writeScope(request, existing, request.server.scope)
-      // Editing a definition keeps its own scope as the base; a cross-scope
-      // write starts from the winning definition so nothing is silently lost.
-      const base = existing?.server
-      const nextServer = mergeServerPatch(base, request.server)
-      this.assertToolNamespaceAvailable(nextServer.id, existing !== undefined)
-
-      if (scope === 'entry') {
-        const current = this.document()
-        this.assertRevision(request.expectedRevision)
-        await this.write({
-          servers: { ...current.servers, [nextServer.id]: nextServer },
-          disabledTools: { ...current.disabledTools },
-        }, request.expectedRevision)
-      } else {
-        await this.writeScopedServer(scope, this.projectDir(request), nextServer.id, nextServer)
-      }
-      // 不等待生命周期,状态由轮询呈现
-      void this.reconcileServer(nextServer.id)
-      return this.snapshot({ projectPath: request.projectPath })
-    })
+    const merged = await this.sourcesFor(request)
+    const existing = merged.servers.find(server => server.id === request.server.id)
+    const scope = this.writeScope(request, existing, request.server.scope)
+    // Editing a definition keeps its own scope as the base; a cross-scope
+    // write starts from the winning definition so nothing is silently lost.
+    const nextServer = mergeServerPatch(existing?.server, request.server)
+    this.assertToolNamespaceAvailable(nextServer.id, existing !== undefined)
+    await this.writeScopedServer(scope, this.projectDir(request), nextServer.id, nextServer)
+    // 不等待生命周期,状态由轮询呈现
+    void this.reconcileServer(nextServer.id)
+    return this.snapshot({ projectPath: request.projectPath })
   }
 
-  private async remove(request: { id: string; expectedRevision?: number } & ScopeTarget): Promise<Snapshot> {
-    if (request.expectedRevision === undefined) throw new TypeError('expectedRevision is required')
-    const expectedRevision = request.expectedRevision
-    return this.enqueueMutation(async () => {
-      const merged = await this.sourcesFor(request)
-      const existing = merged.servers.find(server => server.id === request.id)
-      if (existing === undefined) throw new Error(`MCP server ${JSON.stringify(request.id)} was not found`)
-      const scope = this.writeScope(request, existing)
-      const projectDir = this.projectDir(request)
-
-      if (scope === 'entry') {
-        this.assertRevision(expectedRevision)
-        const current = this.document()
-        const servers = { ...current.servers }
-        Reflect.deleteProperty(servers, request.id)
-        const disabledTools = { ...current.disabledTools }
-        Reflect.deleteProperty(disabledTools, request.id)
-        await this.write({ servers, disabledTools }, expectedRevision)
-      } else {
-        // The definition is what the user asked to delete; the per-tool policy
-        // is this profile's own bookkeeping and is cleaned up afterwards.
-        await this.writeScopedServer(scope, projectDir, request.id, null)
-        const current = this.document()
-        if (current.disabledTools[request.id] !== undefined) {
-          this.assertRevision(expectedRevision)
-          const disabledTools = { ...current.disabledTools }
-          Reflect.deleteProperty(disabledTools, request.id)
-          await this.write({ servers: { ...current.servers }, disabledTools }, expectedRevision)
-        }
-      }
-      // 不等待生命周期,状态由轮询呈现
-      void this.reconcileServer(request.id)
-      return this.snapshot({ projectPath: request.projectPath })
-    })
+  private async remove(request: RemoveServerRequest): Promise<Snapshot> {
+    const merged = await this.sourcesFor(request)
+    const existing = merged.servers.find(server => server.id === request.id)
+    if (existing === undefined) throw new Error(`MCP server ${JSON.stringify(request.id)} was not found`)
+    const scope = this.writeScope(request, existing)
+    // The definition is what the user asked to delete. The per-tool policy is
+    // the entry document's own bookkeeping, which this RPC no longer writes;
+    // the panel clears it through the settings form.
+    await this.writeScopedServer(scope, this.projectDir(request), request.id, null)
+    // 不等待生命周期,状态由轮询呈现
+    void this.reconcileServer(request.id)
+    return this.snapshot({ projectPath: request.projectPath })
   }
 
   private async setEnabled(request: SetServerEnabledRequest): Promise<Snapshot> {
-    return this.enqueueMutation(async () => {
-      const merged = await this.sourcesFor(request)
-      const existing = merged.servers.find(server => server.id === request.id)
-      if (existing === undefined) throw new Error(`MCP server ${JSON.stringify(request.id)} was not found`)
-      const scope = this.writeScope(request, existing)
-      const nextServer: StoredServer = { ...existing.server, enabled: request.enabled }
-      if (scope === 'entry') {
-        this.assertRevision(request.expectedRevision)
-        const current = this.document()
-        await this.write({
-          servers: { ...current.servers, [request.id]: nextServer },
-          disabledTools: { ...current.disabledTools },
-        }, request.expectedRevision)
-      } else {
-        await this.writeScopedServer(scope, this.projectDir(request), request.id, nextServer)
-      }
-      // 不等待生命周期,状态由轮询呈现
-      void this.reconcileServer(request.id)
-      return this.snapshot({ projectPath: request.projectPath })
-    })
+    const merged = await this.sourcesFor(request)
+    const existing = merged.servers.find(server => server.id === request.id)
+    if (existing === undefined) throw new Error(`MCP server ${JSON.stringify(request.id)} was not found`)
+    const scope = this.writeScope(request, existing)
+    const nextServer: StoredServer = { ...existing.server, enabled: request.enabled }
+    await this.writeScopedServer(scope, this.projectDir(request), request.id, nextServer)
+    // 不等待生命周期,状态由轮询呈现
+    void this.reconcileServer(request.id)
+    return this.snapshot({ projectPath: request.projectPath })
   }
 
   private async reload(request: ReloadServerRequest): Promise<Snapshot> {
@@ -450,64 +403,6 @@ export class McpManagerController {
     }
     await this.reconcileServer(request.id, true)
     return this.snapshot({})
-  }
-
-  private async setTool(request: SetToolEnabledRequest): Promise<Snapshot> {
-    return this.enqueueMutation(async () => {
-      const current = this.document()
-      // Only this controller's settings namespace is mutable.  A tool with an
-      // `mcp__...` name may have been registered by another Loader entry; it
-      // is shown, if at all, as read-only and must never create a policy row.
-      if (!this.effectiveIds.includes(request.serverId)) {
-        throw new Error(`tool ${JSON.stringify(request.name)} is not registered by server ${JSON.stringify(request.serverId)}`)
-      }
-      const tool = (await this.snapshot({ projectPath: request.projectPath })).tools
-        .find(candidate => candidate.name === request.name)
-      if (tool === undefined || tool.serverId !== request.serverId) {
-        throw new Error(`tool ${JSON.stringify(request.name)} is not registered by server ${JSON.stringify(request.serverId)}`)
-      }
-      this.assertRevision(request.expectedRevision)
-      const disabled = new Set(current.disabledTools[request.serverId] ?? [])
-      if (request.enabled) disabled.delete(request.name)
-      else disabled.add(request.name)
-      const disabledTools = { ...current.disabledTools }
-      if (disabled.size === 0) Reflect.deleteProperty(disabledTools, request.serverId)
-      else disabledTools[request.serverId] = [...disabled].sort()
-      await this.write({ servers: { ...current.servers }, disabledTools }, request.expectedRevision)
-      this.refreshRestrictions()
-      return this.snapshot({ projectPath: request.projectPath })
-    })
-  }
-
-  /**
-   * Commit one whole entry document through `settings.replace()`.
-   *
-   * `replace()` — not the path-addressed `settings.mutate()` — is the right
-   * member here. `mutate()` exists for a caller holding an INCOMPLETE view of a
-   * namespace (the redacted wire view), which must name only the fields it means
-   * so the write cannot silently drop the `role('secret')` values it never
-   * received. This controller reads the entry's volatile refs, i.e. the resolved
-   * config with secrets included, so it restates every server anyway; `replace()`
-   * then makes the write one all-or-nothing commit guarded by `expectedRevision`.
-   *
-   * `mcp.json` writes carry no revision: the file has no revision, and
-   * `mutateScopeFile` re-reads it inside the cross-process lock instead.
-   */
-  private async write(next: SettingsDocument, expectedRevision: number): Promise<void> {
-    if (!this.ctx.settings.writable) throw new Error('settings provider is read-only')
-    validateStoredDocument(next)
-    await this.ctx.settings.replace(MANAGER_NAMESPACE, next, expectedRevision)
-  }
-
-  /**
-   * Fail fast before the next document is rebuilt. `settings.replace()` runs the
-   * same revision check at write time; raising the settings service's own error
-   * class here keeps one conflict identity across the whole path, so
-   * {@link classifyError} matches it structurally instead of by message text.
-   */
-  private assertRevision(expected: number): void {
-    const actual = this.revision()
-    if (actual !== expected) throw new SettingsConflictError(MANAGER_NAMESPACE, expected, actual)
   }
 
   // ------------------------------------------------------------- lifecycle
@@ -605,7 +500,6 @@ export class McpManagerController {
     })
     const projectPath = this.selectedProjectPath
     return {
-      revision: this.revision(),
       writable: this.ctx.settings.writable,
       servers,
       tools,
@@ -768,15 +662,8 @@ function failure(code: RpcError['code'], message: string): RpcResult<never> {
 }
 
 function classifyError(error: unknown): RpcError['code'] {
-  // Structural first: the settings service raises SettingsConflictError from both
-  // this controller's fail-fast check and its own write-time check, so one class
-  // test covers the whole conflict path.
-  if (error instanceof SettingsConflictError) return 'conflict'
   const code = (error as { code?: unknown } | null)?.code
   if (code === 'MCP_CONFIG_VALIDATION') return 'validation'
-  // Cross-instance fallback: a duplicated settings module would defeat the
-  // `instanceof` above while still carrying the service's stable machine code.
-  if (code === 'SETTINGS_CONFLICT') return 'conflict'
   if (error instanceof TypeError) return 'bad-request'
   if (typeof error === 'object' && error !== null && 'message' in error && String((error as { message: unknown }).message).includes('read-only')) return 'not-writable'
   if (typeof error === 'object' && error !== null && 'message' in error && /not found|not registered/u.test(String((error as { message: unknown }).message))) return 'not-found'

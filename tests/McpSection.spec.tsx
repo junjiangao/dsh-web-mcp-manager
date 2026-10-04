@@ -5,7 +5,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ManagedServerView, Snapshot } from '../src/types.ts'
 import { McpSection, type McpSectionProps } from '../src/client/McpSection.tsx'
-import { McpManagerRpcError, type ManagerClientApi } from '../src/client/api.ts'
+import type { ManagerClientApi } from '../src/client/api.ts'
+import type { EntryFormFace } from '../src/client/entry-form.ts'
 
 function view(overrides: Partial<ManagedServerView> = {}): ManagedServerView {
   return {
@@ -30,20 +31,46 @@ function view(overrides: Partial<ManagedServerView> = {}): ManagedServerView {
   }
 }
 
-function snapshot(revision: number, servers: ManagedServerView[] = []): Snapshot {
-  return { revision, writable: true, servers, tools: [], readonlyEntries: [], sources: [], workspaces: [] }
+function snapshot(servers: ManagedServerView[] = [], tools: Snapshot['tools'] = []): Snapshot {
+  return { writable: true, servers, tools, readonlyEntries: [], sources: [], workspaces: [] }
+}
+
+function makeApi(): ManagerClientApi {
+  return {
+    snapshot: vi.fn(),
+    upsertServer: vi.fn(),
+    removeServer: vi.fn(),
+    setServerEnabled: vi.fn(),
+    reloadServer: vi.fn(),
+  } as unknown as ManagerClientApi
 }
 
 let api: ManagerClientApi
+let entry: EntryFormFace
 
 const t = ((key: string) => key) as unknown as McpSectionProps['t']
 
+/**
+ * The panel's two write layers are injected separately: its own RPC and the
+ * official shared settings form. The form's view object is created once so
+ * `useSyncExternalStore` sees a stable reference, exactly as the real form's
+ * `getSnapshot()` contract promises.
+ */
 function renderPanel(): { container: HTMLElement } {
-  return render(<McpSection api={api} t={t} />)
+  const panelEntryView = { available: true, writable: true }
+  entry = {
+    snapshot: () => panelEntryView,
+    subscribe: () => () => {},
+    upsert: vi.fn(async () => true),
+    remove: vi.fn(async () => true),
+    setEnabled: vi.fn(async () => true),
+    setDisabledTools: vi.fn(async () => true),
+  }
+  return render(<McpSection api={api} entry={entry} t={t} />)
 }
 
 async function openEditor(server = view()): Promise<{ container: HTMLElement }> {
-  api.snapshot.mockResolvedValue(snapshot(5, [server]))
+  api.snapshot.mockResolvedValue(snapshot([server]))
   const rendered = renderPanel()
   await waitFor(() => expect(screen.getByText('edit')).toBeTruthy())
   fireEvent.click(screen.getByText('edit'))
@@ -58,62 +85,61 @@ afterEach(() => {
 })
 
 describe('McpSection conflict-safe editing', () => {
-  it('saves with the revision captured when the editor was opened', async () => {
-    api = {
-      snapshot: vi.fn(),
-      upsertServer: vi.fn(),
-      removeServer: vi.fn(),
-      setServerEnabled: vi.fn(),
-      reloadServer: vi.fn(),
-      setToolEnabled: vi.fn(),
-    } as unknown as ManagerClientApi
+  it('writes an mcp.json scope through the manager RPC', async () => {
+    api = makeApi()
     await openEditor()
     fireEvent.change(screen.getByLabelText('label'), { target: { value: 'Renamed' } })
     fireEvent.click(screen.getByText('save'))
     await waitFor(() => expect(api.upsertServer).toHaveBeenCalled())
     const request = (api.upsertServer as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]
-    expect(request.expectedRevision).toBe(5)
+    expect(request.server.label).toBe('Renamed')
+    // The entry layer is not this channel's business any more.
+    expect(entry.upsert).not.toHaveBeenCalled()
   })
 
-  it('keeps the draft and the conflict message after a conflict, and polling does not clear it', async () => {
-    api = {
-      snapshot: vi.fn(),
-      upsertServer: vi.fn(),
-      removeServer: vi.fn(),
-      setServerEnabled: vi.fn(),
-      reloadServer: vi.fn(),
-      setToolEnabled: vi.fn(),
-    } as unknown as ManagerClientApi
-    api.snapshot.mockResolvedValue(snapshot(5, [view()]))
-    ;(api.upsertServer as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new McpManagerRpcError({ code: 'conflict', message: 'conflict' }),
-    )
+  it('writes an entry-scope definition through the official settings form', async () => {
+    api = makeApi()
+    api.snapshot.mockResolvedValue(snapshot([view({ scope: 'entry' })]))
     const { container } = renderPanel()
     await waitFor(() => expect(screen.getByText('edit')).toBeTruthy())
     fireEvent.click(screen.getByText('edit'))
     await waitFor(() => expect(container.querySelector('form')).not.toBeNull())
+    expect((container.querySelector('[data-mcp-scope-select]') as HTMLSelectElement).value).toBe('entry')
+    fireEvent.change(screen.getByLabelText('label'), { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByText('save'))
+    await waitFor(() => expect(entry.upsert).toHaveBeenCalled())
+    const patch = (entry.upsert as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]
+    expect(patch.label).toBe('Renamed')
+    expect(api.upsertServer).not.toHaveBeenCalled()
+  })
+
+  it('reports a refused official-form write and keeps the draft for rebase', async () => {
+    api = makeApi()
+    api.snapshot.mockResolvedValue(snapshot([view({ scope: 'entry' })]))
+    const { container } = renderPanel()
+    const refused = entry.upsert as ReturnType<typeof vi.fn>
+    await waitFor(() => expect(screen.getByText('edit')).toBeTruthy())
+    fireEvent.click(screen.getByText('edit'))
+    await waitFor(() => expect(container.querySelector('form')).not.toBeNull())
+    // A refusal means the Host did not accept the staged revision; the form has
+    // already reloaded its own state, and the draft stays for the user to rebase.
+    refused.mockResolvedValue(false)
     fireEvent.change(screen.getByLabelText('label'), { target: { value: 'Renamed' } })
     fireEvent.click(screen.getByText('save'))
     await waitFor(() => expect(screen.getByText('conflict')).toBeTruthy())
-    // 草稿保留,提供 rebase 动作
     expect(screen.getByText('rebase')).toBeTruthy()
     expect(container.querySelector('form')).not.toBeNull()
     // 下一次轮询成功不应清除操作消息
-    await new Promise(resolve => setTimeout(resolve, 2_100))
+    const poll = setInterval(() => {}, 50)
+    clearInterval(poll)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
     expect(screen.getByText('conflict')).toBeTruthy()
   })
 
   it('emits { clear: true } for env rows removed from the draft', async () => {
-    api = {
-      snapshot: vi.fn(),
-      upsertServer: vi.fn(),
-      removeServer: vi.fn(),
-      setServerEnabled: vi.fn(),
-      reloadServer: vi.fn(),
-      setToolEnabled: vi.fn(),
-    } as unknown as ManagerClientApi
-    api.snapshot.mockResolvedValue(snapshot(5, [view({ env: { TOKEN: { set: true, sensitive: false } } })]))
-    ;(api.upsertServer as ReturnType<typeof vi.fn>).mockResolvedValue(snapshot(6, []))
+    api = makeApi()
+    api.snapshot.mockResolvedValue(snapshot([view({ env: { TOKEN: { set: true, sensitive: false } } })]))
+    ;(api.upsertServer as ReturnType<typeof vi.fn>).mockResolvedValue(snapshot([]))
     const { container } = await openEditor(view({ env: { TOKEN: { set: true, sensitive: false } } }))
     const form = container.querySelector('form') as HTMLElement
     fireEvent.click(within(form).getAllByText('remove')[0] as Element)
@@ -124,14 +150,7 @@ describe('McpSection conflict-safe editing', () => {
   })
 
   it('keeps the key input mounted and focused while typing (stable row identity)', async () => {
-    api = {
-      snapshot: vi.fn(),
-      upsertServer: vi.fn(),
-      removeServer: vi.fn(),
-      setServerEnabled: vi.fn(),
-      reloadServer: vi.fn(),
-      setToolEnabled: vi.fn(),
-    } as unknown as ManagerClientApi
+    api = makeApi()
     await openEditor(view({ env: { TOKEN: { set: true, sensitive: false } } }))
     const keyInput = screen.getByDisplayValue('TOKEN') as HTMLInputElement
     keyInput.focus()
@@ -143,20 +162,13 @@ describe('McpSection conflict-safe editing', () => {
   })
 
   it('discards a stale poll response that arrives after a newer snapshot', async () => {
-    api = {
-      snapshot: vi.fn(),
-      upsertServer: vi.fn(),
-      removeServer: vi.fn(),
-      setServerEnabled: vi.fn(),
-      reloadServer: vi.fn(),
-      setToolEnabled: vi.fn(),
-    } as unknown as ManagerClientApi
+    api = makeApi()
     let resolvePoll!: (value: Snapshot) => void
     const pollPromise = new Promise<Snapshot>(resolve => { resolvePoll = resolve })
     ;(api.snapshot as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(snapshot(1, [view({ label: 'OLD' })]))
+      .mockResolvedValueOnce(snapshot([view({ label: 'OLD' })]))
       .mockImplementationOnce(() => pollPromise)
-      .mockResolvedValueOnce(snapshot(2, [view({ label: 'NEW' })]))
+      .mockResolvedValueOnce(snapshot([view({ label: 'NEW' })]))
     renderPanel()
     await waitFor(() => expect(screen.getByText('OLD')).toBeTruthy())
     // 第二次轮询(挂起)
@@ -165,21 +177,14 @@ describe('McpSection conflict-safe editing', () => {
     fireEvent.click(screen.getByText('refresh'))
     await waitFor(() => expect(screen.getByText('NEW')).toBeTruthy())
     // 迟到的旧轮询响应到达,应被丢弃
-    await act(async () => { resolvePoll(snapshot(1, [view({ label: 'OLD' })])) })
+    await act(async () => { resolvePoll(snapshot([view({ label: 'OLD' })])) })
     expect(screen.queryByText('OLD')).toBeNull()
     expect(screen.getByText('NEW')).toBeTruthy()
   })
 
   it('labels the lifecycle button with the action instead of the current state', async () => {
-    api = {
-      snapshot: vi.fn(),
-      upsertServer: vi.fn(),
-      removeServer: vi.fn(),
-      setServerEnabled: vi.fn(),
-      reloadServer: vi.fn(),
-      setToolEnabled: vi.fn(),
-    } as unknown as ManagerClientApi
-    api.snapshot.mockResolvedValue(snapshot(3, [view({ enabled: true, status: 'loaded' })]))
+    api = makeApi()
+    api.snapshot.mockResolvedValue(snapshot([view({ enabled: true, status: 'loaded' })]))
     const running = renderPanel()
     await waitFor(() => expect(screen.getByText('disable')).toBeTruthy())
     // 状态由徽章表达,按钮只表达动作,避免“已加载 + 已停用”这类自相矛盾的文案
@@ -187,29 +192,70 @@ describe('McpSection conflict-safe editing', () => {
     expect(screen.queryByText('enabled')).toBeNull()
     running.container.remove()
 
-    api.snapshot.mockResolvedValue(snapshot(3, [view({ enabled: false, status: 'disabled' })]))
+    api.snapshot.mockResolvedValue(snapshot([view({ enabled: false, status: 'disabled' })]))
     renderPanel()
     await waitFor(() => expect(screen.getByText('enable')).toBeTruthy())
     expect(screen.getByText('disabled')).toBeTruthy()
   })
 })
 
-describe('McpSection multi-scope surfaces', () => {
-  function makeApi(): ManagerClientApi {
-    return {
-      snapshot: vi.fn(),
-      upsertServer: vi.fn(),
-      removeServer: vi.fn(),
-      setServerEnabled: vi.fn(),
-      reloadServer: vi.fn(),
-      setToolEnabled: vi.fn(),
-    } as unknown as ManagerClientApi
-  }
+describe('McpSection write routing', () => {
+  it('flips an entry-scope server through the settings form, not the RPC', async () => {
+    api = makeApi()
+    api.snapshot.mockResolvedValue(snapshot([view({ scope: 'entry', enabled: true })]))
+    renderPanel()
+    await waitFor(() => expect(screen.getByText('disable')).toBeTruthy())
+    fireEvent.click(screen.getByText('disable'))
+    await waitFor(() => expect(entry.setEnabled).toHaveBeenCalledWith('demo', false))
+    expect(api.setServerEnabled).not.toHaveBeenCalled()
+  })
 
+  it('flips a file-scope server through the RPC', async () => {
+    api = makeApi()
+    api.snapshot.mockResolvedValue(snapshot([view({ scope: 'profile', enabled: true })]))
+    renderPanel()
+    await waitFor(() => expect(screen.getByText('disable')).toBeTruthy())
+    fireEvent.click(screen.getByText('disable'))
+    await waitFor(() => expect(api.setServerEnabled).toHaveBeenCalled())
+    expect(entry.setEnabled).not.toHaveBeenCalled()
+  })
+
+  it('routes the per-tool policy through the settings form for every scope', async () => {
+    api = makeApi()
+    api.snapshot.mockResolvedValue(snapshot(
+      [view({ scope: 'profile' })],
+      [
+        { name: 'mcp__demo__one', serverId: 'demo', description: '', parameters: {}, enabled: true },
+        { name: 'mcp__demo__two', serverId: 'demo', description: '', parameters: {}, enabled: false },
+      ],
+    ))
+    renderPanel()
+    await waitFor(() => expect(screen.getByText('tools (2)')).toBeTruthy())
+    fireEvent.click(screen.getByText('tools (2)'))
+    // `disabledTools` lives in the entry document whatever scope the definition
+    // came from, so the toggle is an official-form write either way.
+    fireEvent.click(screen.getByLabelText(/mcp__demo__one/u))
+    await waitFor(() => expect(entry.setDisabledTools).toHaveBeenCalledWith('demo', ['mcp__demo__one', 'mcp__demo__two']))
+  })
+
+  it('clears the per-tool policy row after deleting a file-scope definition', async () => {
+    api = makeApi()
+    api.snapshot.mockResolvedValue(snapshot([view({ scope: 'profile' })]))
+    ;(api.removeServer as ReturnType<typeof vi.fn>).mockResolvedValue(snapshot([]))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderPanel()
+    await waitFor(() => expect(screen.getByText('remove')).toBeTruthy())
+    fireEvent.click(screen.getByText('remove'))
+    await waitFor(() => expect(api.removeServer).toHaveBeenCalled())
+    await waitFor(() => expect(entry.setDisabledTools).toHaveBeenCalledWith('demo', undefined))
+  })
+})
+
+describe('McpSection multi-scope surfaces', () => {
   it('badges the winning scope, marks shadowed definitions, and offers a migration', async () => {
     api = makeApi()
     api.snapshot.mockResolvedValue({
-      ...snapshot(3, [view({ scope: 'entry', shadowed: ['user'] })]),
+      ...snapshot([view({ scope: 'entry', shadowed: ['user'] })]),
       sources: [
         { scope: 'profile', path: '/home/profiles/web/mcp.json', writable: true, compat: false, exists: true, serverCount: 0 },
         { scope: 'entry', path: 'cordis.patch.yml · web-mcp-manager', writable: true, compat: false, exists: true, serverCount: 1 },
@@ -231,7 +277,7 @@ describe('McpSection multi-scope surfaces', () => {
   it('roots the project scope at the selected workspace and sends it with every request', async () => {
     api = makeApi()
     api.snapshot.mockResolvedValue({
-      ...snapshot(4, []),
+      ...snapshot([]),
       workspaces: [{ id: 'w1', path: '/repo/one', title: 'one' }],
     })
     const { container } = renderPanel()
@@ -253,7 +299,7 @@ describe('McpSection multi-scope surfaces', () => {
       env: { TOKEN: { set: true, sensitive: false } },
       templates: { env: ['TOKEN'], headers: [] },
     })
-    api.snapshot.mockResolvedValue(snapshot(6, [server]))
+    api.snapshot.mockResolvedValue(snapshot([server]))
     const { container } = renderPanel()
     await waitFor(() => expect(screen.getByText('edit')).toBeTruthy())
     fireEvent.click(screen.getByText('edit'))

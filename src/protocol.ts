@@ -2,7 +2,7 @@
 
 import type {
   ManagedServerView, ManagedToolView, McpScope, ReconnectPolicy, SecretInput, SecretState, ServerPatch, ServerTemplates,
-  SetServerEnabledRequest, SetToolEnabledRequest, ScopeTarget, SnapshotRequest, StoredServer, UpsertServerRequest,
+  SetServerEnabledRequest, ScopeTarget, SnapshotRequest, StoredServer, UpsertServerRequest,
 } from './types.ts'
 import { MCP_SCOPES } from './types.ts'
 import { defaultServer, DEFAULT_RECONNECT, DEFAULT_TOOL_CALL_TIMEOUT_MS, transportOf, validateReconnect, validateServerConfig, validateServerId } from './settings.ts'
@@ -29,21 +29,9 @@ export function asBoolean(value: unknown, field: string): boolean {
   return value
 }
 
-export function asRevision(value: unknown, field = 'expectedRevision'): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new TypeError(`${field} must be a non-negative integer`)
-  return value as number
-}
-
-export function asOptionalRevision(value: unknown): number | undefined {
-  return value === undefined ? undefined : asRevision(value)
-}
-
 export function parseSnapshotRequest(value: unknown): SnapshotRequest {
   const record = asRecord(value ?? {}, 'snapshot payload must be an object')
-  return {
-    ...record.expectedRevision === undefined ? {} : { expectedRevision: asRevision(record.expectedRevision) },
-    ...parseScopeTarget(record),
-  }
+  return parseScopeTarget(record)
 }
 
 /** Read the optional scope/project selection every mutating endpoint accepts. */
@@ -71,22 +59,16 @@ function isAbsolutePath(path: string): boolean {
   return path.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(path) || path.startsWith('\\\\')
 }
 
-export function parseIdRequest(value: unknown): { id: string; expectedRevision?: number } & ScopeTarget {
+export function parseIdRequest(value: unknown): { id: string } & ScopeTarget {
   const record = asRecord(value, 'request payload must be an object')
   const id = asString(record.id, 'id')
   validateServerId(id)
-  return {
-    id,
-    ...record.expectedRevision === undefined ? {} : { expectedRevision: asRevision(record.expectedRevision) },
-    ...parseScopeTarget(record),
-  }
+  return { id, ...parseScopeTarget(record) }
 }
 
 export function parseSetEnabledRequest(value: unknown): SetServerEnabledRequest {
   const record = asRecord(value, 'setServerEnabled payload must be an object')
-  const base = parseIdRequest(record)
-  if (base.expectedRevision === undefined) throw new TypeError('expectedRevision is required')
-  return { ...base, enabled: asBoolean(record.enabled, 'enabled'), expectedRevision: base.expectedRevision }
+  return { ...parseIdRequest(record), enabled: asBoolean(record.enabled, 'enabled') }
 }
 
 export function parseReloadRequest(value: unknown): { id: string } {
@@ -98,24 +80,8 @@ export function parseReloadRequest(value: unknown): { id: string } {
 
 export function parseUpsertRequest(value: unknown): UpsertServerRequest {
   const record = asRecord(value, 'upsertServer payload must be an object')
-  const expectedRevision = asRevision(record.expectedRevision)
   const server = parseServerPatch(record.server)
-  return { server, expectedRevision, ...parseScopeTarget(record) }
-}
-
-export function parseToolRequest(value: unknown): SetToolEnabledRequest {
-  const record = asRecord(value, 'setToolEnabled payload must be an object')
-  const serverId = asString(record.serverId, 'serverId')
-  validateServerId(serverId)
-  const name = asString(record.name, 'name')
-  if (name.length === 0 || name.length > 128) throw new TypeError('name must be 1 to 128 characters')
-  return {
-    serverId,
-    name,
-    enabled: asBoolean(record.enabled, 'enabled'),
-    expectedRevision: asRevision(record.expectedRevision),
-    ...parseScopeTarget(record),
-  }
+  return { server, ...parseScopeTarget(record) }
 }
 
 function parseStringArray(value: unknown, field: string): string[] {

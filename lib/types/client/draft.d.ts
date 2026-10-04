@@ -2,8 +2,10 @@
  * Pure draft/patch projection helpers for the MCP settings form.
  *
  * These functions own no component state and are exported so the form
- * behaviour (conflict-safe revisions, secret clear/rename, lossless args)
- * can be tested without a browser.
+ * behaviour (secret clear/rename, lossless args) can be tested without a
+ * browser. They carry no revision: an entry-scope write is fenced by the
+ * official shared settings form, and an `mcp.json` write is fenced by the
+ * cross-process file lock `mutateScopeFile` takes around its read-modify-write.
  */
 import type { ManagedServerView, McpScope, SecretInput, SecretState, ServerPatch } from '../types.ts';
 /**
@@ -16,8 +18,6 @@ import type { ManagedServerView, McpScope, SecretInput, SecretState, ServerPatch
 export declare const SERVER_ID_PATTERN = "[\\-A-Za-z0-9_]{1,32}";
 export interface ServerDraft {
     id: string;
-    /** Snapshot revision captured when the editor was opened; never re-read from polling. */
-    baseRevision: number;
     /** Scope this write targets; `entry` means the legacy Loader-entry store. */
     scope: McpScope;
     label: string;
@@ -57,7 +57,7 @@ export interface SecretDraft {
      */
     templated: boolean;
 }
-export declare function draftFromServer(server?: ManagedServerView, baseRevision?: number, defaultScope?: McpScope): ServerDraft;
+export declare function draftFromServer(server?: ManagedServerView, defaultScope?: McpScope): ServerDraft;
 export declare function newSecretDraft(): SecretDraft;
 export declare function secretDrafts(value?: Readonly<Record<string, SecretState>>, templated?: readonly string[]): SecretDraft[];
 export declare function draftPatch(draft: ServerDraft): ServerPatch;

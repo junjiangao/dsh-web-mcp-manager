@@ -1,15 +1,19 @@
 /** Settings → MCP page. It intentionally owns no durable state. */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ManagedServerView, ManagedToolView, McpScope, ReadonlyMcpEntry, SecretInput, Snapshot } from '../types.ts'
 import { PLUGIN_IDENTITY } from '../types.ts'
-import { McpManagerRpcError, type ManagerClientApi } from './api.ts'
+import type { ManagerClientApi } from './api.ts'
+import type { EntryFormFace } from './entry-form.ts'
 import type { McpLocaleKey } from './locales.ts'
 import { SERVER_ID_PATTERN, draftFromServer, draftPatch, duplicateDraftKeys, newSecretDraft, type SecretDraft, type ServerDraft } from './draft.ts'
 
 export interface McpSectionInjected {
+  /** The manager's own RPC: the `mcp.json` scopes and runtime status. */
   readonly api: ManagerClientApi
+  /** The official shared settings form: the legacy Loader-entry scope. */
+  readonly entry: EntryFormFace
 }
 
 export type McpSectionProps =
@@ -463,7 +467,7 @@ function useVisiblePolling(
   }, [api, onError, onSnapshot, nextSeq, projectPath])
 }
 
-export function McpSection({ api, t }: McpSectionProps): ReactNode {
+export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
   const [state, setState] = useState<ViewState>({ status: 'loading' })
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState<ServerDraft | undefined>()
@@ -472,6 +476,8 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
   const [pollFailed, setPollFailed] = useState(false)
   /** Registered workspace the project scope is rooted at; `undefined` = none. */
   const [projectPath, setProjectPath] = useState<string | undefined>()
+  /** Availability and writability of the official form that owns the entry scope. */
+  const entryView = useSyncExternalStore(entry.subscribe, entry.snapshot)
 
   // Scoped stylesheet for states inline styles cannot express; injected once per document.
   useEffect(() => {
@@ -508,11 +514,8 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
 
   /** User-operation failures set the action message; kept until the next operation. */
   const rejectAction = useCallback((error: unknown): void => {
-    const message = error instanceof McpManagerRpcError && error.code === 'conflict'
-      ? t('conflict')
-      : error instanceof Error ? error.message : String(error)
-    setMessage(message)
-  }, [t])
+    setMessage(error instanceof Error ? error.message : String(error))
+  }, [])
 
   useVisiblePolling(api, projectPath, accept, rejectPoll, nextSeq)
 
@@ -534,13 +537,24 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
    */
   const defaultScope: McpScope = projectPath === undefined ? 'profile' : 'project'
 
+  /**
+   * Whether a write to one scope would be accepted right now.
+   *
+   * The two layers have different writers, so they have different gates: the
+   * entry scope follows the official form's own availability and writability,
+   * and an `mcp.json` scope follows the Host document's.
+   */
+  const canWrite = (scope: McpScope): boolean => {
+    if (snapshot?.writable === false) return false
+    return scope === 'entry' ? entryView.writable : true
+  }
+
   /** Copy a legacy entry-scope server into the writable scope for this session. */
   const migrate = (server: ManagedServerView): void => {
     if (snapshot === undefined) return
     void run(() => api.upsertServer({
       scope: defaultScope,
       projectPath,
-      expectedRevision: snapshot.revision,
       server: {
         id: server.id, label: server.label, enabled: server.enabled, transport: server.transport,
         command: server.command, args: [...server.args], cwd: server.cwd, url: server.url,
@@ -567,6 +581,33 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
     finally { setBusy(false) }
   }
 
+  /**
+   * Apply one official-form write, then re-read the resolved view.
+   *
+   * The form answers with acceptance rather than a snapshot: it owns revision
+   * fencing and recovery, so a refusal already reloaded the Host state. The
+   * panel therefore reports the refusal and re-reads through its own RPC, which
+   * stays the single place the merged `project → profile → user → entry` view
+   * is computed.
+   */
+  const runEntry = async (operation: () => Promise<boolean>): Promise<boolean> => {
+    setBusy(true)
+    setMessage(undefined)
+    try {
+      if (!await operation()) {
+        setMessage(t('conflict'))
+        return false
+      }
+      const seq = nextSeq()
+      accept(await api.snapshot({ projectPath }), seq)
+      return true
+    } catch (error) {
+      rejectAction(error)
+      return false
+    }
+    finally { setBusy(false) }
+  }
+
   const save = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
     if (snapshot === undefined || draft === undefined) return
@@ -576,29 +617,60 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
       return
     }
     const patch = draftPatch(draft)
-    const next = await run(() => api.upsertServer({ server: patch, expectedRevision: draft.baseRevision, projectPath }))
-    if (next !== undefined) setDraft(undefined)
+    // An entry-scope definition is a plugin's own configuration, so it is
+    // written through the official shared form; an `mcp.json` scope has no
+    // official surface and stays on the manager's own RPC.
+    const saved = draft.scope === 'entry'
+      ? await runEntry(() => entry.upsert(patch))
+      : await run(() => api.upsertServer({ server: patch, projectPath })) !== undefined
+    if (saved) setDraft(undefined)
   }
 
-  /** Re-open the editor from the latest server view after a conflict (drops draft edits). */
+  /** Re-open the editor from the latest server view after a refusal (drops draft edits). */
   const rebase = (): void => {
     if (snapshot === undefined || draft === undefined) return
     const current = snapshot.servers.find(server => server.id === draft.id)
-    setDraft(current === undefined ? undefined : draftFromServer(current, snapshot.revision))
+    setDraft(current === undefined ? undefined : draftFromServer(current, defaultScope))
     setMessage(undefined)
   }
 
   const toggleServer = (server: ManagedServerView): void => {
     if (snapshot === undefined) return
-    void run(() => api.setServerEnabled({ id: server.id, enabled: !server.enabled, expectedRevision: snapshot.revision, projectPath }))
+    const enabled = !server.enabled
+    if (server.scope === 'entry') {
+      void runEntry(() => entry.setEnabled(server.id, enabled))
+      return
+    }
+    void run(() => api.setServerEnabled({ id: server.id, enabled, projectPath }))
   }
 
   const remove = (server: ManagedServerView): void => {
     if (snapshot === undefined || !window.confirm(t('confirmRemove'))) return
-    void run(() => api.removeServer({ id: server.id, expectedRevision: snapshot.revision, projectPath }))
+    if (server.scope === 'entry') {
+      void runEntry(() => entry.remove(server.id))
+      return
+    }
+    void run(async () => {
+      const next = await api.removeServer({ id: server.id, projectPath })
+      // The per-tool policy is the entry document's own bookkeeping. Deleting
+      // the definition here leaves that row behind, so the panel clears it
+      // through the official form, the only writer of the entry now.
+      await entry.setDisabledTools(server.id, undefined)
+      return next
+    })
   }
 
   const reload = (server: ManagedServerView): void => { void run(() => api.reloadServer({ id: server.id })) }
+
+  /** The policy row the official form should hold after one tool checkbox flips. */
+  const setToolEnabled = (server: ManagedServerView, tool: ManagedToolView, enabled: boolean): void => {
+    const disabled = (snapshot?.tools ?? [])
+      .filter(candidate => candidate.serverId === server.id)
+      .filter(candidate => candidate.name === tool.name ? !enabled : !candidate.enabled)
+      .map(candidate => candidate.name)
+      .sort()
+    void runEntry(() => entry.setDisabledTools(server.id, disabled))
+  }
 
   const isConflictMessage = message === t('conflict')
 
@@ -607,7 +679,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
       <header style={headerStyle}>
         <div style={headerRowStyle}>
           <h2 style={titleStyle}>{t('title')}</h2>
-          <button type="button" data-variant="primary" style={buttonPrimaryStyle} onClick={() => setDraft(draftFromServer(undefined, snapshot?.revision ?? 0, defaultScope))} disabled={busy || snapshot?.writable === false}>{t('add')}</button>
+          <button type="button" data-variant="primary" style={buttonPrimaryStyle} onClick={() => setDraft(draftFromServer(undefined, defaultScope))} disabled={busy || !canWrite(defaultScope)}>{t('add')}</button>
           <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => { if (snapshot !== undefined) void run(() => api.snapshot({ projectPath })) }} disabled={busy}>{t('refresh')}</button>
         </div>
         <div style={subtitleRowStyle}>
@@ -648,9 +720,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
       </details> : null}
       {message !== undefined ? <p role={isConflictMessage ? 'status' : 'alert'} style={isConflictMessage ? noticeBoxStyle : errorBoxStyle}>
         {message}
-        {isConflictMessage && draft !== undefined
-          ? <button type="button" data-variant="ghost" style={{ ...buttonGhostStyle, marginInlineStart: 8 }} onClick={rebase}>{t('rebase')}</button>
-          : null}
+        {isConflictMessage ? <button type="button" data-variant="ghost" style={{ ...buttonGhostStyle, marginInlineStart: 8 }} onClick={rebase}>{t('rebase')}</button> : null}
         {!isConflictMessage ? <button type="button" data-variant="ghost" style={{ ...buttonGhostStyle, marginInlineStart: 8, padding: '2px 8px' }} onClick={() => setMessage(undefined)} aria-label={t('dismiss')}>✕</button> : null}
       </p> : null}
       {pollFailed && state.status === 'ready' ? <p role="status" style={noticeBoxStyle}>{t('pollFailed')}</p> : null}
@@ -664,16 +734,13 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
           tools={tools.filter(tool => tool.serverId === server.id)}
           t={t}
           busy={busy}
-          writable={snapshot?.writable ?? false}
-          onEdit={() => setDraft(draftFromServer(server, snapshot?.revision ?? 0, defaultScope))}
+          writable={canWrite(server.scope)}
+          onEdit={() => setDraft(draftFromServer(server, defaultScope))}
           onToggle={() => { toggleServer(server) }}
           onReload={() => { reload(server) }}
           onRemove={() => { remove(server) }}
           onMigrate={() => { migrate(server) }}
-          onToolToggle={(tool, enabled) => {
-            if (snapshot === undefined) return
-            void run(() => api.setToolEnabled({ serverId: server.id, name: tool.name, enabled, expectedRevision: snapshot.revision, projectPath }))
-          }}
+          onToolToggle={(tool, enabled) => { setToolEnabled(server, tool, enabled) }}
         />
       ))}
       {draft !== undefined ? (
@@ -686,7 +753,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
             <Field label={t('scope')}>
               <select data-mcp-scope-select="" style={fieldInputStyle} value={draft.scope} onChange={event => setDraft({ ...draft, scope: event.currentTarget.value as ServerDraft['scope'] })}>
                 {(['project', 'profile', 'user', 'entry'] as const).map(scope =>
-                  <option key={scope} value={scope} disabled={scope === 'project' && projectPath === undefined}>{t(SCOPE_KEYS[scope])}</option>)}
+                  <option key={scope} value={scope} disabled={(scope === 'project' && projectPath === undefined) || (scope === 'entry' && !entryView.available)}>{t(SCOPE_KEYS[scope])}</option>)}
               </select>
             </Field>
             <Field label={t('transport')}>
@@ -721,7 +788,7 @@ export function McpSection({ api, t }: McpSectionProps): ReactNode {
             </details>
           </fieldset>
           <div style={formActionsStyle}>
-            <button type="submit" data-variant="primary" style={buttonPrimaryStyle} disabled={busy || snapshot?.writable === false}>{t('save')}</button>
+            <button type="submit" data-variant="primary" style={buttonPrimaryStyle} disabled={busy || !canWrite(draft.scope)}>{t('save')}</button>
             <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => setDraft(undefined)} disabled={busy}>{t('cancel')}</button>
           </div>
         </form>

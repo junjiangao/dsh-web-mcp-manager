@@ -1,22 +1,18 @@
 /** Runtime validation and redacted projections for the manager RPC. */
-import type { ManagedServerView, ManagedToolView, McpScope, SecretInput, ServerPatch, ServerTemplates, SetServerEnabledRequest, SetToolEnabledRequest, ScopeTarget, SnapshotRequest, StoredServer, UpsertServerRequest } from './types.ts';
+import type { ManagedServerView, ManagedToolView, McpScope, SecretInput, ServerPatch, ServerTemplates, SetServerEnabledRequest, ScopeTarget, SnapshotRequest, StoredServer, UpsertServerRequest } from './types.ts';
 export declare function isRecord(value: unknown): value is Record<string, unknown>;
 export declare function asRecord(value: unknown, message: string): Record<string, unknown>;
 export declare function asString(value: unknown, field: string): string;
 export declare function asBoolean(value: unknown, field: string): boolean;
-export declare function asRevision(value: unknown, field?: string): number;
-export declare function asOptionalRevision(value: unknown): number | undefined;
 export declare function parseSnapshotRequest(value: unknown): SnapshotRequest;
 export declare function parseIdRequest(value: unknown): {
     id: string;
-    expectedRevision?: number;
 } & ScopeTarget;
 export declare function parseSetEnabledRequest(value: unknown): SetServerEnabledRequest;
 export declare function parseReloadRequest(value: unknown): {
     id: string;
 };
 export declare function parseUpsertRequest(value: unknown): UpsertServerRequest;
-export declare function parseToolRequest(value: unknown): SetToolEnabledRequest;
 export declare function mergeSecretMap(current: Record<string, string>, patch: Readonly<Record<string, SecretInput>> | undefined): Record<string, string>;
 export declare function mergeServerPatch(base: StoredServer | undefined, patch: ServerPatch): StoredServer;
 export declare function cloneServer(server: StoredServer): StoredServer;

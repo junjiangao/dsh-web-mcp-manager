@@ -2,13 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SettingsConflictError } from '@deepseek-ai/dsh-settings'
 import type { SettingsDocument } from '../src/types.ts'
 import { defaultDocument, defaultServer } from '../src/settings.ts'
 import { McpManagerController } from '../src/host/controller.ts'
 
 let document: SettingsDocument = defaultDocument()
-let revision = 0
 
 /**
  * The harness home is redirected before any controller resolves a path, so the
@@ -30,8 +28,10 @@ const controllers: McpManagerController[] = []
 
 const ctx = {
   settings: {
-    describe: vi.fn(() => [{ ns: 'web-mcp-manager', revision }]),
-    replace: vi.fn(async (_ns: string, next: SettingsDocument) => { document = next; revision += 1 }),
+    // The RPC no longer reads or writes the entry document at all: that layer
+    // belongs to the official shared settings form. `replace` stays mocked so a
+    // stray call would be visible rather than fatal.
+    replace: vi.fn(async (_ns: string, next: SettingsDocument) => { document = next }),
     writable: true,
     documentPath: join(profileDir, 'cordis.patch.yml'),
   },
@@ -66,7 +66,6 @@ async function mount(): Promise<McpManagerController> {
 
 beforeEach(() => {
   document = defaultDocument()
-  revision = 0
   rmSync(profileDir, { recursive: true, force: true })
   mkdirSync(profileDir, { recursive: true })
   rmSync(join(home, 'mcp.json'), { force: true })
@@ -102,45 +101,53 @@ async function waitForServer(
 }
 
 describe('McpManagerController', () => {
-  it('rejects writes with a stale revision as conflict', async () => {
+  it('refuses to write the legacy entry scope through the RPC', async () => {
     const controller = await mount()
-    revision = 2
-    const result = await controller.handle('upsertServer', { scope: 'entry', server: { id: 'x', command: 'node' }, expectedRevision: 1 }, signal())
+    const result = await controller.handle('upsertServer', { scope: 'entry', server: { id: 'x', command: 'node' } }, signal())
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error.code).toBe('conflict')
+    // The entry document's only writer is the official shared settings form,
+    // which fences the change with its own revision; this channel would be a
+    // second, unfenced path to the same document.
+    if (!result.ok) {
+      expect(result.error.code).toBe('bad-request')
+      expect(result.error.message).toContain('settings form')
+    }
+    expect((ctx as never as { settings: { replace: ReturnType<typeof vi.fn> } }).settings.replace).not.toHaveBeenCalled()
   })
 
-  it('carries the settings service conflict identity on a stale revision', async () => {
+  it('refuses to remove or disable a server whose definition lives at entry scope', async () => {
+    document = { servers: { legacy: { ...defaultServer('legacy'), command: 'node' } }, disabledTools: {} }
     const controller = await mount()
-    revision = 2
-    const result = await controller.handle('upsertServer', { scope: 'entry', server: { id: 'x', command: 'node' }, expectedRevision: 1 }, signal())
-    expect(result.ok).toBe(false)
-    // The manager raises `SettingsConflictError` itself, so the wire message is
-    // the service's own wording rather than a locally formatted string.
-    if (!result.ok) expect(result.error.message).toContain('settings namespace')
+    for (const request of [
+      { endpoint: 'removeServer', payload: { id: 'legacy' } },
+      { endpoint: 'setServerEnabled', payload: { id: 'legacy', enabled: false } },
+    ]) {
+      const result = await controller.handle(request.endpoint, request.payload, signal())
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error.code).toBe('bad-request')
+    }
+    // The definition is untouched: the panel migrates or removes it through
+    // the form, not here.
+    expect(document.servers.legacy).toBeDefined()
   })
 
-  it('classifies a write-time conflict raised by the settings service itself', async () => {
+  it('has no endpoint for the per-tool policy: that document is the form\'s', async () => {
     const controller = await mount()
-    // The manager's fail-fast check passes, so the only conflict identity that
-    // can reach the classifier is the one `replace()` throws.
-    ;(ctx as never as { settings: { replace: ReturnType<typeof vi.fn> } }).settings.replace
-      .mockRejectedValueOnce(new SettingsConflictError('web-mcp-manager', 0, 1))
-    const result = await controller.handle('upsertServer', { scope: 'entry', server: { id: 'x', command: 'node' }, expectedRevision: 0 }, signal())
+    const result = await controller.handle('setToolEnabled', { serverId: 'x', name: 'mcp__x__one', enabled: false }, signal())
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error.code).toBe('conflict')
+    if (!result.ok) expect(result.error.message).toContain('unknown MCP manager endpoint')
   })
 
   it('writes a new server into the profile mcp.json scope', async () => {
     const controller = await mount()
-    const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' }, expectedRevision: 0 }, signal())
+    const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' } }, signal())
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.servers.map(server => [server.id, server.scope])).toEqual([['x', 'profile']])
     expect(result.value.sources.find(source => source.scope === 'profile')?.serverCount).toBe(1)
     // A file-scope write carries no revision fence: the file is re-read inside
-    // the cross-process lock instead.
-    expect(revision).toBe(0)
+    // the cross-process lock instead, and the entry document is never touched.
+    expect((ctx as never as { settings: { replace: ReturnType<typeof vi.fn> } }).settings.replace).not.toHaveBeenCalled()
   })
 
   it('does not block the write on lifecycle startup', async () => {
@@ -150,7 +157,7 @@ describe('McpManagerController', () => {
       dispose: vi.fn(async () => {}),
     })
     const controller = await mount()
-    const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' }, expectedRevision: 0 }, signal())
+    const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' } }, signal())
     expect(result.ok).toBe(true)
     // reconcile 已入队(后台挂起),但写操作已返回
     await vi.waitFor(() => expect((ctx as never as { plugin: ReturnType<typeof vi.fn> }).plugin).toHaveBeenCalled())
@@ -166,9 +173,9 @@ describe('McpManagerController', () => {
       dispose: vi.fn(async () => {}),
     })
     const controller = await mount()
-    const first = await controller.handle('upsertServer', { server: { id: 'a', command: 'node' }, expectedRevision: 0 }, signal())
+    const first = await controller.handle('upsertServer', { server: { id: 'a', command: 'node' } }, signal())
     expect(first.ok).toBe(true)
-    const second = await controller.handle('upsertServer', { server: { id: 'b', command: 'node' }, expectedRevision: 0 }, signal())
+    const second = await controller.handle('upsertServer', { server: { id: 'b', command: 'node' } }, signal())
     expect(second.ok).toBe(true)
     resolveA()
     await Promise.resolve()
@@ -186,7 +193,7 @@ describe('McpManagerController', () => {
       dispose: vi.fn(async () => {}),
     })
     const controller = await mount()
-    const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' }, expectedRevision: 0 }, signal())
+    const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' } }, signal())
     expect(result.ok).toBe(true)
     for (let turn = 0; turn < 500 && plugin.mock.calls.length === 0; turn++) {
       await new Promise(resolve => realSetImmediate(resolve))
@@ -204,8 +211,7 @@ describe('McpManagerController', () => {
   it('surfaces a template that has no environment value as a named failure', async () => {
     const controller = await mount()
     await controller.handle('upsertServer', {
-      server: { id: 'templated', command: 'node', env: { TOKEN: '${env:DSH_MCP_TEST_MISSING}' } },
-      expectedRevision: 0,
+      server: { id: 'templated', command: 'node', env: { TOKEN: '${env:DSH_MCP_TEST_MISSING}' } }
     }, signal())
     const failed = await waitForServer(controller, server => server.error !== undefined)
     expect(failed?.error).toContain('DSH_MCP_TEST_MISSING')
@@ -223,8 +229,7 @@ describe('McpManagerController', () => {
 
     const migrated = await controller.handle('upsertServer', {
       scope: 'profile',
-      server: { id: 'legacy', command: 'node' },
-      expectedRevision: 0,
+      server: { id: 'legacy', command: 'node' }
     }, signal())
     expect(migrated.ok).toBe(true)
     if (migrated.ok) {
@@ -236,7 +241,7 @@ describe('McpManagerController', () => {
   it('degrades to the user scope when this deployment has no profile directory', async () => {
     ;(ctx as never as { settings: { documentPath?: string } }).settings.documentPath = undefined
     const controller = await mount()
-    const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' }, expectedRevision: 0 }, signal())
+    const result = await controller.handle('upsertServer', { server: { id: 'x', command: 'node' } }, signal())
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.value.servers[0]?.scope).toBe('user')
   })

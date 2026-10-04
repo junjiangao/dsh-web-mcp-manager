@@ -71,9 +71,9 @@ describe('MCP draft projection helpers', () => {
 describe('MCP draft scope and template rows', () => {
   it('carries the scope the editor targeted', () => {
     // A new server takes the panel default; an existing one keeps its own scope.
-    expect(draftFromServer(undefined, 0, 'project').scope).toBe('project')
-    expect(draftPatch(draftFromServer(undefined, 0, 'project')).scope).toBe('project')
-    expect(draftFromServer(viewWithScope('user'), 0, 'project').scope).toBe('user')
+    expect(draftFromServer(undefined, 'project').scope).toBe('project')
+    expect(draftPatch(draftFromServer(undefined, 'project')).scope).toBe('project')
+    expect(draftFromServer(viewWithScope('user'), 'project').scope).toBe('user')
   })
 
   it('never rewrites or clears a row whose value is an environment template', () => {

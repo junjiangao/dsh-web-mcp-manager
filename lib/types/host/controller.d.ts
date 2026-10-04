@@ -1,7 +1,7 @@
 /** Host-side dsh 0.2 configuration, RPC, MCP lifecycle, and tool policy controller. */
 import type { Context } from '@deepseek-ai/cordis';
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection';
-import { type SettingsForms } from '@deepseek-ai/dsh-settings';
+import type { SettingsForms } from '@deepseek-ai/dsh-settings';
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools';
 import type { RpcResult } from '../types.ts';
 import { type ManagerSettings } from '../settings.ts';
@@ -12,8 +12,9 @@ interface HostContext extends Context {
 }
 /**
  * The controller deliberately owns no browser state. Server definitions live in
- * the `mcp.json` scope files (or, for legacy installs, the Loader entry's
- * `Config`); the settings provider is the source of truth for the per-tool
+ * the `mcp.json` scope files; a legacy Loader-entry definition is read from the
+ * entry's volatile refs and written by the browser through the official shared
+ * settings form; the settings document is the source of truth for the per-tool
  * policy. Every operation re-resolves the sources, then reconciles only the
  * affected server's Cordis child Fiber.
  */
@@ -27,7 +28,6 @@ export declare class McpManagerController {
     private fileWatchDispose;
     private rpcDispose;
     private guardDispose;
-    private mutationTail;
     private readonly lifecycleQueues;
     private suppressRestrictionEvents;
     private disposed;
@@ -53,8 +53,6 @@ export declare class McpManagerController {
     handle(endpoint: string, payload: unknown, signal: AbortSignal): Promise<RpcResult<unknown>>;
     /** The live entry document, read through the volatile refs on every call. */
     private document;
-    private revision;
-    private enqueueMutation;
     /** The active profile directory, as the settings provider reports it. */
     private profileDir;
     /** Registered workspaces the panel may root the project scope at. */
@@ -84,6 +82,12 @@ export declare class McpManagerController {
      * private to this profile and always writable. A deployment without a profile
      * directory (or without that scope) degrades to the user scope rather than
      * failing the write.
+     *
+     * The entry scope is never a destination here: it is not a file but the
+     * Loader entry's own configuration, whose only writer is the official shared
+     * settings form the browser drives. A request that names it — or that would
+     * inherit it from a legacy definition — is refused rather than answered with
+     * a second, unfenced write path.
      */
     private writeScope;
     /** Write one server definition into a non-entry scope file. */
@@ -92,29 +96,6 @@ export declare class McpManagerController {
     private remove;
     private setEnabled;
     private reload;
-    private setTool;
-    /**
-     * Commit one whole entry document through `settings.replace()`.
-     *
-     * `replace()` — not the path-addressed `settings.mutate()` — is the right
-     * member here. `mutate()` exists for a caller holding an INCOMPLETE view of a
-     * namespace (the redacted wire view), which must name only the fields it means
-     * so the write cannot silently drop the `role('secret')` values it never
-     * received. This controller reads the entry's volatile refs, i.e. the resolved
-     * config with secrets included, so it restates every server anyway; `replace()`
-     * then makes the write one all-or-nothing commit guarded by `expectedRevision`.
-     *
-     * `mcp.json` writes carry no revision: the file has no revision, and
-     * `mutateScopeFile` re-reads it inside the cross-process lock instead.
-     */
-    private write;
-    /**
-     * Fail fast before the next document is rebuilt. `settings.replace()` runs the
-     * same revision check at write time; raising the settings service's own error
-     * class here keeps one conflict identity across the whole path, so
-     * {@link classifyError} matches it structurally instead of by message text.
-     */
-    private assertRevision;
     private reconcileAll;
     /** Serialize one server's lifecycle operations, including reload/dispose, per server id. */
     private reconcileServer;

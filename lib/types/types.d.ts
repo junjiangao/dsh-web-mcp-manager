@@ -21,8 +21,20 @@
 export declare const MCP_MANAGER_API_CHANNEL: "/api";
 /** Endpoint prefix this plugin owns inside the shared channel. */
 export declare const MCP_MANAGER_ENDPOINT_PREFIX: "mcp-manager";
-/** Every manager endpoint, in registration order. */
-export declare const MCP_MANAGER_ENDPOINTS: readonly ["snapshot", "upsertServer", "removeServer", "setServerEnabled", "reloadServer", "setToolEnabled"];
+/**
+ * Every manager endpoint, in registration order.
+ *
+ * These cover the `mcp.json` scopes and runtime status only. The legacy
+ * Loader-entry scope is absent on purpose: it is a plugin's own configuration,
+ * so the browser edits it through the official shared settings form
+ * (`ctx.configForms`) rather than through a private protocol.
+ */
+export declare const MCP_MANAGER_ENDPOINTS: readonly ["snapshot", "upsertServer", "removeServer", "setServerEnabled", "reloadServer"];
+/**
+ * The Loader entry id this plugin's Host half is mounted under, which is also
+ * its settings namespace. It is the key `ctx.configForms.get()` takes.
+ */
+export declare const MCP_MANAGER_NAMESPACE: "web-mcp-manager";
 export type ManagerRpcEndpoint = typeof MCP_MANAGER_ENDPOINTS[number];
 /**
  * Absolute exact Fetch-route path for one endpoint.
@@ -123,7 +135,6 @@ export interface ReadonlyMcpEntry {
     readonly fiberPhase: 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null;
 }
 export interface Snapshot {
-    readonly revision: number;
     readonly writable: boolean;
     readonly servers: readonly ManagedServerView[];
     readonly tools: readonly ManagedToolView[];
@@ -166,39 +177,29 @@ export interface ServerPatch {
  * Where a write lands.
  *
  * A `project` scope is only accepted when `projectPath` names a registered
- * workspace root; the Host never writes outside a root it can prove.
+ * workspace root; the Host never writes outside a root it can prove. An `entry`
+ * target is refused: see {@link MCP_MANAGER_ENDPOINTS}.
  */
 export interface ScopeTarget {
     readonly scope?: McpScope;
     readonly projectPath?: string;
 }
-export interface SnapshotRequest extends ScopeTarget {
-    readonly expectedRevision?: number;
-}
+export type SnapshotRequest = ScopeTarget;
 export interface UpsertServerRequest extends ScopeTarget {
     readonly server: ServerPatch;
-    readonly expectedRevision: number;
 }
 export interface RemoveServerRequest extends ScopeTarget {
     readonly id: string;
-    readonly expectedRevision: number;
 }
 export interface SetServerEnabledRequest extends ScopeTarget {
     readonly id: string;
     readonly enabled: boolean;
-    readonly expectedRevision: number;
 }
 export interface ReloadServerRequest {
     readonly id: string;
 }
-export interface SetToolEnabledRequest extends ScopeTarget {
-    readonly serverId: string;
-    readonly name: string;
-    readonly enabled: boolean;
-    readonly expectedRevision: number;
-}
 export interface RpcError {
-    readonly code: 'bad-request' | 'conflict' | 'not-found' | 'not-writable' | 'validation' | 'internal' | 'aborted';
+    readonly code: 'bad-request' | 'not-found' | 'not-writable' | 'validation' | 'internal' | 'aborted';
     readonly message: string;
     readonly details?: Record<string, unknown>;
 }

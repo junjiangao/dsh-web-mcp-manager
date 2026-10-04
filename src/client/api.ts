@@ -4,7 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
 import type {
   ManagerRpcEndpoint, RemoveServerRequest, ReloadServerRequest, RpcError, SetServerEnabledRequest,
-  SetToolEnabledRequest, Snapshot, SnapshotRequest, UpsertServerRequest,
+  Snapshot, SnapshotRequest, UpsertServerRequest,
 } from '../types.ts'
 import { isRpcResult } from '../types.ts'
 import type {} from '@deepseek-ai/dsh-client-connection/client'
@@ -20,13 +20,19 @@ export class McpManagerRpcError extends Error {
   }
 }
 
+/**
+ * The manager's own RPC covers the `mcp.json` scopes and runtime status.
+ *
+ * The Loader-entry scope is absent here by design: it is a plugin's own
+ * configuration, so the panel edits it through the official shared settings
+ * form (see `./entry-form.ts`) rather than through this channel.
+ */
 export interface ManagerClientApi {
   snapshot(request?: SnapshotRequest, signal?: AbortSignal): Promise<Snapshot>
   upsertServer(request: UpsertServerRequest, signal?: AbortSignal): Promise<Snapshot>
   removeServer(request: RemoveServerRequest, signal?: AbortSignal): Promise<Snapshot>
   setServerEnabled(request: SetServerEnabledRequest, signal?: AbortSignal): Promise<Snapshot>
   reloadServer(request: ReloadServerRequest, signal?: AbortSignal): Promise<Snapshot>
-  setToolEnabled(request: SetToolEnabledRequest, signal?: AbortSignal): Promise<Snapshot>
 }
 
 export function createManagerApi(ctx: Context): ManagerClientApi {
@@ -50,6 +56,5 @@ export function createManagerApi(ctx: Context): ManagerClientApi {
     removeServer: (request, signal) => call<Snapshot>('removeServer', request, signal),
     setServerEnabled: (request, signal) => call<Snapshot>('setServerEnabled', request, signal),
     reloadServer: (request, signal) => call<Snapshot>('reloadServer', request, signal),
-    setToolEnabled: (request, signal) => call<Snapshot>('setToolEnabled', request, signal),
   }
 }
