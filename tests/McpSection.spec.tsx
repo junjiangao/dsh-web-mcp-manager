@@ -56,8 +56,8 @@ const t = ((key: string) => key) as unknown as McpSectionProps['t']
  * `useSyncExternalStore` sees a stable reference, exactly as the real form's
  * `getSnapshot()` contract promises.
  */
-function renderPanel(): { container: HTMLElement } {
-  const panelEntryView = { available: true, writable: true }
+function renderPanel(entryView: { available: boolean; writable: boolean } = { available: true, writable: true }): { container: HTMLElement } {
+  const panelEntryView = entryView
   entry = {
     snapshot: () => panelEntryView,
     subscribe: () => () => {},
@@ -104,7 +104,9 @@ describe('McpSection conflict-safe editing', () => {
     await waitFor(() => expect(screen.getByText('edit')).toBeTruthy())
     fireEvent.click(screen.getByText('edit'))
     await waitFor(() => expect(container.querySelector('form')).not.toBeNull())
-    expect((container.querySelector('[data-mcp-scope-select]') as HTMLSelectElement).value).toBe('entry')
+    // The segmented control marks the entry segment as the selected tab.
+    expect(container.querySelector('[data-mcp-scope-select]')?.getAttribute('data-mcp-scope-select')).toBe('entry')
+    expect(screen.getByRole('tab', { name: 'scopeEntry' }).getAttribute('aria-selected')).toBe('true')
     fireEvent.change(screen.getByLabelText('label'), { target: { value: 'Renamed' } })
     fireEvent.click(screen.getByText('save'))
     await waitFor(() => expect(entry.upsert).toHaveBeenCalled())
@@ -290,7 +292,27 @@ describe('McpSection multi-scope surfaces', () => {
     // A new server defaults to the project scope once a workspace is selected.
     fireEvent.click(screen.getByText('add'))
     await waitFor(() => expect(container.querySelector('[data-mcp-scope-select]')).not.toBeNull())
-    expect((container.querySelector('[data-mcp-scope-select]') as HTMLSelectElement).value).toBe('project')
+    // A new server defaults to the project scope once a workspace is selected,
+    // and the segmented control shows every scope at once — the point of a
+    // multi-scope store — with the selected one marked.
+    expect(container.querySelector('[data-mcp-scope-select]')?.getAttribute('data-mcp-scope-select')).toBe('project')
+    expect(screen.getByRole('tab', { name: 'scopeProject' }).getAttribute('aria-selected')).toBe('true')
+    for (const scope of ['project', 'profile', 'user', 'entry']) {
+      expect(screen.getByRole('tab', { name: `scope${scope[0]?.toUpperCase()}${scope.slice(1)}` })).toBeTruthy()
+    }
+  })
+
+  it('locks a scope the current deployment cannot take the write for', async () => {
+    api = makeApi()
+    api.snapshot.mockResolvedValue(snapshot([]))
+    // No entry form means no entry-scope write, so the segment says so instead
+    // of offering a save the Host would refuse.
+    const { container } = renderPanel({ available: false, writable: false })
+    await waitFor(() => expect(screen.getByText('add')).toBeTruthy())
+    fireEvent.click(screen.getByText('add'))
+    await waitFor(() => expect(container.querySelector('[data-mcp-scope-select]')).not.toBeNull())
+    expect((screen.getByRole('tab', { name: 'scopeEntry' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('tab', { name: 'scopeProfile' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('keeps a templated secret row read-only instead of rewriting it', async () => {

@@ -42,6 +42,7 @@
       "inject": [
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-primitives",
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-settings"
       ],
@@ -78,6 +79,7 @@
     "@deepseek-ai/dsh-atomic-write": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-connection": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-locale": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-ui-renderer": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-ui-settings": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.1",
@@ -95,6 +97,7 @@
     "@deepseek-ai/dsh-atomic-write": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-client-connection": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-client-locale": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-client-ui-renderer": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-client-ui-settings": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-alpha.1",
@@ -110,6 +113,7 @@
     "@testing-library/user-event": "^14.6.7",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
+    "clsx": "^2.1.1",
     "jsdom": "^30.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

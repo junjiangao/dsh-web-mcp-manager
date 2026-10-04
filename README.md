@@ -1,6 +1,6 @@
 # DSH Web MCP Manager
 
-MCP service management for the DeepSeek Harness Web profile. The plugin adds a **Settings → MCP** section for panel-managed servers, lifecycle actions, and per-tool enablement. Server definitions live in `mcp.json` files; the per-tool policy lives in the Loader entry `Config` for `web-mcp-manager`.
+MCP service management for the DeepSeek Harness Web profile. The plugin adds a **Settings → MCP** section for panel-managed servers, lifecycle actions, and per-tool enablement. Server definitions live in `mcp.json` files; the per-tool policy lives in the Loader entry `Config` for `web-mcp-manager`, which the panel edits through the official shared settings form (`ctx.configForms`) rather than through its own protocol.
 
 ## Server sources
 
@@ -12,7 +12,7 @@ One server name resolves to the highest-precedence definition; the rest are repo
 | project (compat) | `<workspace>/.mcp.json` | Claude Code's file, read-only, ranks just below the project scope |
 | profile | `~/.dsh/profiles/<profile>/mcp.json` | the default target for a new server |
 | user | `~/.dsh/mcp.json` | honours `$DSH_HOME` |
-| entry (legacy) | the `web-mcp-manager` Loader entry's `Config.servers` | what earlier versions stored; shown read-only with a **Migrate to mcp.json** action |
+| entry (legacy) | the `web-mcp-manager` Loader entry's `Config.servers` | what earlier versions stored; edited through the official `ctx.configForms` form, with a **Migrate to mcp.json** action |
 
 The file format is the one the surrounding ecosystem already uses, so the same file works in Claude Code, Codex, pi, VS Code, and Codebuddy:
 
@@ -36,6 +36,26 @@ The file format is the one the surrounding ecosystem already uses, so the same f
 - SSE is refused with a clear message rather than silently downgraded, because `dsh-mcp-client` supports `stdio` and `streamable-http` only.
 - Writes take the official cross-process file lock and commit through an atomic rename at mode `0600`; a file with a JSON syntax error refuses the write instead of being overwritten, and only that one scope reports the error.
 - Every scope file is watched, so editing `~/.dsh/mcp.json` in an editor reconciles the running servers without a restart.
+
+Writes go to different places depending on the scope, because the two layers are
+owned by different parts of dsh:
+
+- A `project` / `profile` / `user` definition is a file with no configuration
+  surface in dsh, so the panel writes it through this plugin's own authenticated
+  RPC, where `mutateScopeFile` re-reads it inside the official cross-process
+  lock.
+- The legacy `entry` definition is a Loader entry's own configuration, which dsh
+  already has a surface for: the shared `ctx.configForms` form. The panel writes
+  it there as revision-fenced path operations, and the RPC refuses an `entry`
+  target outright rather than offering a second, unfenced path to the same
+  document. The same form carries the per-tool policy (`disabledTools`), which
+  stays in the entry whatever scope the definition came from.
+
+Path operations are not merely tidier here: `env` and `headers` are declared
+`role('secret')`, so their values are removed before the section reaches the
+browser. A write that restated a whole server would silently drop every
+credential it never received; the panel instead names only the fields it means,
+and touches a secret only where a value was typed or a key was removed.
 
 ## Install
 
@@ -132,6 +152,16 @@ against both ends of the supported train.
 `@deepseek-ai/schemastery` is a peer rather than a dependency so the plugin and
 dsh share one schema instance; the profile therefore installs no
 `@deepseek-ai/*` package for this plugin at all.
+
+Interactive chrome comes from `@deepseek-ai/dsh-client-ui-primitives`
+(`Button`, `Input`, `Checkbox`, `Switch`, `Tag`, `StateDot`,
+`SegmentedControl`), which the Web shell already bundles and serves through its
+shared module table — the plugin only declares it, never installs it. That
+package publishes one flat ESM bundle whose undeclared imports include
+`shiki`/`katex`/`micromark`, so it can only be loaded by a bundler or through
+that table; under Vitest the specifier resolves to `tests/stubs/ui-primitives.tsx`,
+a double that mirrors the published markup while `tsc` still checks every prop
+against the real declarations.
 
 ## Development and artifacts
 

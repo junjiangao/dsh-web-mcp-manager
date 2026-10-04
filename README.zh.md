@@ -1,6 +1,6 @@
 # DSH Web MCP Manager
 
-DeepSeek Harness Web profile 的 MCP 服务管理插件。它在“设置 → MCP”提供面板自管服务的配置、启停、重载和工具开关；服务定义存放在 `mcp.json` 文件里；逐工具策略保存在 `web-mcp-manager` Loader 条目的 `Config` 中，并由 dsh profile 配置层持久化。
+DeepSeek Harness Web profile 的 MCP 服务管理插件。它在“设置 → MCP”提供面板自管服务的配置、启停、重载和工具开关；服务定义存放在 `mcp.json` 文件里；逐工具策略保存在 `web-mcp-manager` Loader 条目的 `Config` 中，由 dsh profile 配置层持久化，面板通过**官方共享设置表单**（`ctx.configForms`）读写它，而不是走插件私有协议。
 
 ## 服务来源
 
@@ -12,7 +12,7 @@ DeepSeek Harness Web profile 的 MCP 服务管理插件。它在“设置 → MC
 | 项目级兼容 | `<workspace>/.mcp.json` | Claude Code 约定，只读，优先级仅低于项目级自身文件 |
 | 配置级 | `~/.dsh/profiles/<profile>/mcp.json` | 新建服务的默认落点 |
 | 用户级 | `~/.dsh/mcp.json` | 尊重 `$DSH_HOME` |
-| 遗留层 | Loader entry `web-mcp-manager` 的 `Config.servers` | 早期版本的存储位置，只读展示并提供「迁移到 mcp.json」 |
+| 遗留层 | Loader entry `web-mcp-manager` 的 `Config.servers` | 早期版本的存储位置，通过官方 `ctx.configForms` 表单编辑，并提供「迁移到 mcp.json」 |
 
 文件格式与周边生态一致，同一份文件可被 Claude Code、Codex、pi、VS Code、Codebuddy 直接读取：
 
@@ -36,6 +36,13 @@ DeepSeek Harness Web profile 的 MCP 服务管理插件。它在“设置 → MC
 - SSE 会给出明确错误而不是静默降级 —— `dsh-mcp-client` 只支持 `stdio` 与 `streamable-http`。
 - 写入使用官方跨进程文件锁并以原子 rename 提交（权限 `0600`）；JSON 语法损坏的文件会被拒绝覆盖，且只有该层报错，其余层照常工作。
 - 每个来源文件都被监听：用编辑器改 `~/.dsh/mcp.json` 后无需重启即可重新协调。
+
+写入落在哪里取决于层级，因为这两层归 dsh 的不同部分所有：
+
+- `project` / `profile` / `user` 是文件，dsh 没有对应的配置面，因此面板走本插件自己的鉴权 RPC 写入，由 `mutateScopeFile` 在官方跨进程锁内重新读取再提交。
+- 遗留的 `entry` 层是 Loader 条目自身的配置，dsh 本来就有配置面：官方共享 `ctx.configForms` 表单。面板以带 revision 栅栏的路径操作写入，RPC 则直接拒绝 `entry` 目标，而不是提供第二条没有栅栏的写路径。逐工具策略（`disabledTools`）也走同一个表单 —— 无论定义来自哪一层，它都存放在 entry 里。
+
+用路径操作不只是更整洁：`env` / `headers` 声明为 `role('secret')`，其值在到达浏览器前就被删除，任何“重述整个 server”的写都会静默丢掉浏览器从未收到的凭据；面板只声明它真正要改的字段，只有用户输入了新值或删除了某个键时才会碰对应密钥。
 
 ## 安装
 
@@ -118,6 +125,13 @@ dsh 还会在加载插件前执行兼容门：运行版本不满足某个 `@deep
 
 `@deepseek-ai/schemastery` 声明为 peer 而非 dependency，使插件与 dsh 共用同一个 schema
 实例；profile 因此不会为本插件安装任何 `@deepseek-ai/*` 包。
+
+交互控件来自 `@deepseek-ai/dsh-client-ui-primitives`（`Button`、`Input`、`Checkbox`、
+`Switch`、`Tag`、`StateDot`、`SegmentedControl`）。Web shell 已经打包该包并通过共享
+module table 提供它，插件只声明、不安装。它发布的是单个扁平 ESM bundle，其中还引用了
+`shiki`/`katex`/`micromark` 等未声明的依赖，因此只能由打包器或该 module table 加载；
+在 Vitest 下该 specifier 解析到 `tests/stubs/ui-primitives.tsx`（复刻官方 DOM 的替身），
+而每个 prop 仍由 `tsc` 对着官方声明做类型检查。
 
 ## 开发与更新产物
 

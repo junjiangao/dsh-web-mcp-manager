@@ -9,10 +9,12 @@
 > | P0-4 升级兼容守卫 | ✅ 已落地 | `scripts/check-dsh-compat.mjs`、`tests/dependency-surface.spec.ts`、CI 双版本检查 |
 > | P1a `mcp.json` 核心 | ✅ 已落地 | `mcp-json.ts` / `mcp-file.ts` / `mcp-sources.ts` / `interpolate.ts` + controller/protocol 接入 |
 > | P1b 面板 | ✅ 已落地 | 层级徽标、遮盖标注、来源列表、工作区选择、模板只读行、迁移按钮 |
-> | P2 UI 基元 / 官方 `configForms` | ⏳ 未开始 | 见第 6 节 |
+> | P2-1 官方 UI 基元 | ✅ 已落地 | `Button` / `Input` / `Checkbox` / `Switch` / `Tag` / `StateDot` / `SegmentedControl` |
+> | P2-2 官方 `configForms` | ✅ 已落地 | entry 层读写改走官方共享表单；Host 侧 entry 写入路径整体删除 |
 >
-> 验收：`pnpm typecheck` 通过；**86 个用例 / 12 个文件**全绿；`pnpm build` 幂等且 `lib/` 已提交；
-> `pnpm check:compat` 对 `0.2.0-rc.1` 与 `0.2.1-alpha.1` 均通过。
+> 验收：`pnpm typecheck` 通过；**101 个用例 / 13 个文件**全绿；`pnpm build` 字节级幂等且 `lib/` 已提交；
+> `pnpm check:compat` 对 `0.2.0-rc.1` 与 `0.2.1-alpha.1` 均通过；
+> `pnpm install --frozen-lockfile` 通过。
 
 - 仓库：`/work/Repos/github/dsh-web-mcp-manager`（分支 `integrate-dsh-0.2`）
 - 插件版本：`@junjiangao/dsh-web-mcp-manager@0.4.0`（本轮从 `0.3.1` 升上来，见 `package.json`）
@@ -390,16 +392,51 @@ dsh plugin allow-version          # 或插件管理器里的授权入口
 
 ---
 
-## 6. 方案 D（P2）：UI 与官方基座对齐
+## 6. 方案 D（P2）：UI 与官方基座对齐 —— 落地结果
 
-1. `src/client/McpSection.tsx`（794 行，全内联样式）迁移到官方 `@deepseek-ai/dsh-client-ui-primitives`：`Button` / `Input` / `Switch` / `SegmentedControl`（transport 切换）/ `Pill`+`StateDot`（状态与 scope 徽标）/ `DisclosureRow`（高级选项）/ `Modal`+`RiskConfirmation`（删除与迁移确认）/ `Toast`。
-   - 收益：跟随官方主题与 token（`--dsw-*`），减少自维护样式，按钮/表单无障碍语义由官方保证。
-   - 代价：+1 个 client peer（`dsh-client-ui-primitives`，Web bundle 已带）。
-2. 用官方 `ctx.configForms.get('web-mcp-manager')` 做**entry 层**的读（`ConfigFormSnapshot` 已含 `value/base/user/revision/writable` 与官方脱敏）与写（`form.mutate(pathOps)` 可按路径改字段，**不需要重述密钥**）。
-   - 这一步能删掉 `src/protocol.ts` 里 `parseUpsertRequest`/`parseSecretMap`/`mergeServerPatch` 与 `controller.ts` 的 `assertRevision`/`write()`/`SettingsConflictError` 分类逻辑的一大块。
-   - 但它与 C 阶段的四级来源模型有重叠，**建议在 C 落地并稳定后再做**，避免一次改两层抽象。
-3. 用官方 `dsh-client-store` 的 `createSnapshotStore` 管理面板状态，替代手写 `useState` + `useRef` 的轮询簿记（保留现有的"单调 seq 丢弃过期响应"语义）。
-4. `locale/*.json` 增加 `meta.title` / `meta.description` 的多语言（README 已说明 Plugins 页读这里）；面板自有文案在 `src/client/locales.ts`，两处都要加。
+### 6.1 entry 层读写改走官方 `ctx.configForms`（已完成）
+
+`src/client/entry-form.ts` 把 entry 层（旧 Loader entry 的 `Config`）的读写交给官方共享表单：
+
+- 读：`ctx.configForms.get('web-mcp-manager')` 的 `ConfigFormSnapshot`（`value` 已由官方 `redactSecrets` 脱敏、`revision`/`writable`/`mode` 官方维护）。
+- 写：`form.mutate(pathOps)` 按路径改字段。**这是唯一安全的写法**——`env`/`headers` 声明为 `role('secret')`，其值在过线前就被删除，任何"重述整个 server"的写都会静默丢掉浏览器从未收到的凭据；路径写只动用户真正改过的那几个键。
+
+由此删除的 Host 代码（都在 `src/host/controller.ts`）：
+
+| 删除项 | 原因 |
+| --- | --- |
+| `write()` / `settings.replace()` | entry 文档不再由 Host 写 |
+| `assertRevision()` / `SettingsConflictError` 分类 | 官方 `mutate` 自带 revision fence 与拒绝恢复 |
+| `enqueueMutation()` / `mutationTail` | 文件写由 `mutateScopeFile` 的跨进程锁保证原子；entry 写由官方表单串行 |
+| `setToolEnabled` 端点 | `disabledTools` 是 entry 文档的一部分，改由表单写 |
+| `revision()` / `snapshot.revision` | 客户端不再需要读 revision |
+| 各请求的 `expectedRevision` 字段 | 同上 |
+
+RPC 端点从 6 个减到 5 个，且**只覆盖 `mcp.json` 各 scope 与运行时状态**；显式指定 `entry` 或以 entry 为赢家的写请求会以 `bad-request` 拒绝，而不是提供第二条无 fence 的写路径。
+
+一处刻意的取舍：**entry 层的"显示读"仍由 Host 的解析快照提供**。Host 本来就必须合并 `project → profile → user → entry` 才能挂载服务器，面板渲染这份唯一的优先级真相，比在浏览器里再合并一份副本更不容易分叉；官方 mirror 另外提供可用性/可写性与 revision。
+
+### 6.2 面板迁移到官方 UI 基元（已完成）
+
+`src/client/McpSection.tsx` 的交互控件全部换成 `@deepseek-ai/dsh-client-ui-primitives`：
+
+`Button`（primary/outline/ghost）、`Input`、`Checkbox`、`Switch`、`Tag`、`StateDot`、`SegmentedControl`（scope 与 transport）。面板删掉了自维护的按钮/输入框/徽标/chip 样式常量与对应的 hover CSS，只保留布局、卡片 hover、`<details>` 箭头、原生 `select`/`textarea` 度量，以及两处刻意的例外：
+
+- `.mcp-fill`：官方 `Input` 把 `className` 放在自己的 inline-flex wrapper 上，只给内层 input 设宽度撑不满。
+- `[data-mcp-danger]`：官方 `Button` 没有 destructive variant，删除/移除按钮用描边按钮 + 该属性上色。
+
+刻意**没有**采用的部分及理由：
+
+- `SettingsFormModel` / `SettingsForm` / `SettingsValueField`：它们的字段是**同一 namespace 内的扁平标量路径**（`settingsTextField('field')` 生成 `['field']`）。本插件的编辑器是一个 server 字典，且一半写入目标是**没有 namespace 的 `mcp.json` 文件**；`SettingsForm` 还是"离开页面即丢弃、不提供取消"的页面框，而这里是带显式取消的内联卡片。
+- `DisclosureRow`：它是带图标的操作行折叠组件，语义上不优于原生 `<details>`。
+
+顺带修正了一处无障碍语义：`SegmentedControl` 之前被包在 `<label>` 里（一个 `<label>` 只能关联一个表单控件），会使每个 segment 的可访问名变空；现在分组控件走新的 `FieldGroup`（`<div>` + 文案），`<label>` 只留给单个原生控件。
+
+### 6.3 未做（本次范围外）
+
+- 用官方 `dsh-client-store` 的 `createSnapshotStore` 替换手写轮询簿记（保留"单调 seq 丢弃过期响应"语义）。
+- 官方 `Modal` + `RiskConfirmation` 替换 `window.confirm` 的删除确认。
+- `locale/*.json` 的 `meta.title` / `meta.description` 多语言。
 
 ---
 
@@ -415,8 +452,8 @@ dsh plugin allow-version          # 或插件管理器里的授权入口
 | **P1-2** | 文件读写 + 锁 + 监听（官方 atomic-write / home-paths） | `src/host/mcp-file.ts`(新) `tests/mcp-file.spec.ts`(新) `package.json`(peer) | P1-1 |
 | **P1-3** | controller/protocol 接入 scope；项目根经 workspaceRegistry 校验 | `src/host/controller.ts` `src/protocol.ts` `src/settings.ts` | P1-1/2 |
 | **P1-4** | 面板：来源徽标、scope 选择、只读遮盖提示、迁移入口 | `src/client/McpSection.tsx` `src/client/draft.ts` `src/client/locales.ts` `locale/*.json` `tests/McpSection.spec.tsx` | P1-3 |
-| **P2-1** | 官方 UI 基元迁移 | `src/client/McpSection.tsx` `package.json` | P1-4 |
-| **P2-2**（可选） | entry 层读写改走官方 `configForms` | `src/client/*` `src/host/controller.ts` `src/protocol.ts` | C 稳定后 |
+| **P2-1** | 官方 UI 基元迁移 | `src/client/McpSection.tsx` `package.json` `vitest.config.ts`(新) `tests/stubs/ui-primitives.tsx`(新) | P1-4 |
+| **P2-2** | entry 层读写改走官方 `configForms` | `src/client/entry-form.ts`(新) `src/client/McpSection.tsx` `src/client/index.ts` `src/client/api.ts` `src/host/controller.ts` `src/protocol.ts` `src/types.ts` `src/settings.ts` | P1-4 |
 
 **流程约束（沿用本仓库既有做法）**：
 

@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import {
+  Button, Checkbox, Input, SegmentedControl, StateDot, Switch, Tag,
+  type StateDotState, type TagTone,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ManagedServerView, ManagedToolView, McpScope, ReadonlyMcpEntry, SecretInput, Snapshot } from '../types.ts'
 import { PLUGIN_IDENTITY } from '../types.ts'
 import type { ManagerClientApi } from './api.ts'
@@ -50,6 +54,15 @@ const RADIUS_CTRL = '6px'
 const MONO_FONT = 'var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)'
 
 /**
+ * Makes an official `Input` fill its grid cell.
+ *
+ * `Input` puts `className` on its own inline-flex wrapper and renders the
+ * native input inside it, so a width on the input alone would not stretch the
+ * control.
+ */
+const FILL = 'mcp-fill'
+
+/**
  * Every token below is verified to exist in `@deepseek-ai/dsh-client-ui-theme`
  * (light under `body`, dark under `body[data-ds-dark-theme]`). Tokens that do
  * not exist keep the hardcoded fallback in both themes, so only well-known
@@ -59,7 +72,6 @@ const COLORS = {
   text: 'var(--dsw-alias-label-primary, #0f1115)',
   textSecondary: 'var(--dsw-alias-label-secondary, #61666b)',
   textTertiary: 'var(--dsw-alias-label-tertiary, #81858c)',
-  textInverted: 'var(--dsw-alias-label-primary-inverted, #ffffff)',
   border: 'var(--dsw-alias-border-l2, #e1e5ee)',
   borderSubtle: 'var(--dsw-alias-border-l1, #ebeef2)',
   borderStrong: 'var(--dsw-alias-border-l3, #dcdcdc)',
@@ -67,32 +79,35 @@ const COLORS = {
   surfaceSubtle: 'var(--dsw-alias-bg-layer-1, #fafafa)',
   surfaceRaised: 'var(--dsw-alias-bg-layer-3, #f5f5f5)',
   business: 'var(--dsw-alias-state-business-primary, #2f6fed)',
-  success: 'var(--dsw-alias-state-success-primary, #22c55e)',
   warn: 'var(--dsw-alias-state-warn-primary, #f59e0b)',
   danger: 'var(--dsw-alias-state-error-primary, #ec1313)',
-  idle: 'var(--dsw-alias-state-idle-primary, #d4d4d4)',
 } as const
 
 const ELEVATION_SOFT = 'var(--dsw-elevation-soft, 0 1px 2px rgba(16, 24, 40, 0.05))'
 
 /**
- * Scoped stylesheet for everything inline styles cannot express: hover /
- * active feedback, disabled affordances, the focus ring and the disclosure
- * chevron. `!important` is deliberate — the base look is inline, and inline
- * declarations otherwise win over stylesheet rules.
+ * Scoped stylesheet for the panel's own layout.
+ *
+ * Interactive chrome is no longer styled here: every control is an official
+ * `@deepseek-ai/dsh-client-ui-primitives` component that brings its own
+ * themed stylesheet, so this sheet is left with the card hover, the native
+ * `select`/`textarea` metrics the primitives do not cover, the `<details>`
+ * chevron, the disabled affordance, and the two deliberate departures
+ * (`FILL` to stretch an `Input`, `data-mcp-danger` because the primitives
+ * expose no destructive button variant). `!important` is deliberate: the
+ * panel's base look is inline, and inline declarations otherwise win.
  */
 const PANEL_CSS = [
   '[data-mcp-manager="panel"] :focus-visible { outline: 2px solid ' + COLORS.business + '; outline-offset: 1px; }',
-  '[data-mcp-manager="panel"] button { transition: background-color .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease; }',
   '[data-mcp-manager="panel"] button:disabled { opacity: .45; cursor: not-allowed !important; }',
-  '[data-mcp-manager="panel"] button[data-variant="primary"]:not(:disabled):hover { background: var(--dsw-alias-button-primary-hover, #43454a) !important; }',
-  '[data-mcp-manager="panel"] button[data-variant="ghost"]:not(:disabled):hover { background: var(--dsw-alias-button-ghost-active-hover, #e9ecf2) !important; border-color: var(--dsw-alias-button-ghost-active-border, #979da6) !important; }',
-  '[data-mcp-manager="panel"] button[data-variant="danger"]:not(:disabled):hover { background: var(--dsw-alias-interactive-bg-hover-danger, rgba(236, 19, 19, 0.06)) !important; }',
+  '[data-mcp-manager="panel"] button[data-mcp-danger]:not(:disabled) { color: ' + COLORS.danger + ' !important; border-color: ' + COLORS.danger + ' !important; }',
+  '[data-mcp-manager="panel"] button[data-mcp-danger]:not(:disabled):hover { background: var(--dsw-alias-interactive-bg-hover-danger, rgba(236, 19, 19, 0.06)) !important; }',
+  '[data-mcp-manager="panel"] .' + FILL + ' { display: flex; width: 100%; max-width: 100%; }',
   '[data-mcp-manager="panel"] [data-mcp-server] { transition: border-color .15s ease, box-shadow .15s ease; }',
   '[data-mcp-manager="panel"] [data-mcp-server]:hover { border-color: ' + COLORS.borderStrong + ' !important; box-shadow: var(--dsw-elevation-panel, ' + ELEVATION_SOFT + ') !important; }',
   '[data-mcp-manager="panel"] input, [data-mcp-manager="panel"] select, [data-mcp-manager="panel"] textarea { transition: border-color .15s ease, background-color .15s ease; }',
-  '[data-mcp-manager="panel"] input:not(:disabled):hover, [data-mcp-manager="panel"] select:not(:disabled):hover, [data-mcp-manager="panel"] textarea:not(:disabled):hover { border-color: ' + COLORS.borderStrong + ' !important; }',
-  '[data-mcp-manager="panel"] input:focus-visible, [data-mcp-manager="panel"] select:focus-visible, [data-mcp-manager="panel"] textarea:focus-visible { border-color: ' + COLORS.business + ' !important; }',
+  '[data-mcp-manager="panel"] select:not(:disabled):hover, [data-mcp-manager="panel"] textarea:not(:disabled):hover { border-color: ' + COLORS.borderStrong + ' !important; }',
+  '[data-mcp-manager="panel"] select:focus-visible, [data-mcp-manager="panel"] textarea:focus-visible { border-color: ' + COLORS.business + ' !important; }',
   '[data-mcp-manager="panel"] summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; }',
   '[data-mcp-manager="panel"] summary::-webkit-details-marker { display: none; }',
   '[data-mcp-manager="panel"] summary::before { content: ""; flex: 0 0 auto; width: 0; height: 0; border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent; opacity: .55; transition: transform .15s ease; }',
@@ -101,45 +116,27 @@ const PANEL_CSS = [
 ].join('\n')
 const PANEL_STYLE_ID = 'mcp-manager-panel-style'
 
-/** Status colours are used for the dot only; the label stays a readable neutral. */
-const STATUS_TONES: Record<ManagedServerView['status'], { dot: string; surface: string }> = {
-  loaded: { dot: COLORS.success, surface: 'var(--dsw-alias-state-success-tertiary, #e6faed)' },
-  waiting: { dot: COLORS.warn, surface: 'var(--dsw-alias-state-warn-tertiary, #fef5e7)' },
-  loading: { dot: COLORS.business, surface: 'var(--dsw-alias-state-business-tertiary, #eaf3ff)' },
-  failed: { dot: COLORS.danger, surface: 'var(--dsw-alias-interactive-bg-hover-danger, rgba(236, 19, 19, 0.06))' },
-  disabled: { dot: COLORS.idle, surface: COLORS.surfaceRaised },
+/**
+ * Status → official `Tag` tone and `StateDot` state.
+ *
+ * The panel no longer owns a status palette: `Tag` supplies the surface and
+ * `StateDot` the glyph, both from the theme tokens the rest of the product
+ * uses, so a status reads the same here as anywhere else.
+ */
+const TAG_TONES: Record<ManagedServerView['status'], TagTone> = {
+  loaded: 'success',
+  waiting: 'warning',
+  loading: 'info',
+  failed: 'danger',
+  disabled: 'neutral',
 }
 
-const badgeBase: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '2px 8px',
-  fontSize: 12,
-  lineHeight: '18px',
-  fontWeight: 500,
-  whiteSpace: 'nowrap',
-  borderRadius: 999,
-}
-
-const dotStyle: React.CSSProperties = {
-  flex: '0 0 auto',
-  width: 6,
-  height: 6,
-  borderRadius: '50%',
-}
-
-const chipBase: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '2px 8px',
-  fontSize: 12,
-  lineHeight: '18px',
-  fontWeight: 500,
-  whiteSpace: 'nowrap',
-  border: '1px solid',
-  borderRadius: RADIUS_CTRL,
+const DOT_STATES: Record<ManagedServerView['status'], StateDotState> = {
+  loaded: 'done',
+  waiting: 'warning',
+  loading: 'ongoing',
+  failed: 'error',
+  disabled: 'idle',
 }
 
 /** Localized label per source scope. */
@@ -150,11 +147,13 @@ const SCOPE_KEYS = {
   entry: 'scopeEntry',
 } as const
 
-function sourceChip(source: ReadonlyMcpEntry['source']): React.CSSProperties {
-  return source === 'loader'
-    ? { ...chipBase, color: COLORS.textTertiary, background: COLORS.surfaceSubtle, borderColor: COLORS.borderSubtle }
-    : { ...chipBase, color: COLORS.business, background: 'var(--dsw-alias-state-business-tertiary, #eaf3ff)', borderColor: 'transparent' }
-}
+/** Every scope, in the order the editor's segmented control shows them. */
+const SCOPE_OPTIONS: readonly McpScope[] = ['project', 'profile', 'user', 'entry']
+
+const TRANSPORT_OPTIONS: readonly { readonly value: ServerDraft['transport']; readonly label: McpLocaleKey }[] = [
+  { value: 'stdio', label: 'stdio' },
+  { value: 'streamable-http', label: 'http' },
+]
 
 const panelStyle: React.CSSProperties = {
   maxWidth: 860,
@@ -187,37 +186,6 @@ const identityChipStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-const baseButtonStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 6,
-  padding: '6px 12px',
-  border: '1px solid transparent',
-  borderRadius: RADIUS_CTRL,
-  fontSize: 13,
-  lineHeight: '18px',
-  fontWeight: 500,
-  cursor: 'pointer',
-}
-const buttonPrimaryStyle: React.CSSProperties = {
-  ...baseButtonStyle,
-  background: 'var(--dsw-alias-button-primary-fill, #0f1115)',
-  color: COLORS.textInverted,
-}
-const buttonGhostStyle: React.CSSProperties = {
-  ...baseButtonStyle,
-  background: 'var(--dsw-alias-button-ghost-active-fill, #f1f3f5)',
-  borderColor: COLORS.border,
-  color: COLORS.text,
-}
-const buttonDangerStyle: React.CSSProperties = {
-  ...baseButtonStyle,
-  background: 'transparent',
-  borderColor: COLORS.danger,
-  color: COLORS.danger,
-}
-
 const fieldLabelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 12,
@@ -225,7 +193,12 @@ const fieldLabelStyle: React.CSSProperties = {
   color: COLORS.textTertiary,
   marginBottom: 4,
 }
-const fieldInputStyle: React.CSSProperties = {
+/**
+ * The one native control the primitives do not cover: a multi-line command.
+ * It keeps the panel's field metrics so it sits level with the official
+ * `Input` beside it.
+ */
+const textareaStyle: React.CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   padding: '6px 10px',
@@ -235,15 +208,32 @@ const fieldInputStyle: React.CSSProperties = {
   background: 'var(--dsw-alias-bg-layer-1, #ffffff)',
   border: '1px solid ' + COLORS.border,
   borderRadius: RADIUS_CTRL,
-}
-const textareaStyle: React.CSSProperties = { ...fieldInputStyle, resize: 'vertical' }
-const checkStyle: React.CSSProperties = {
-  accentColor: COLORS.business,
-  cursor: 'pointer',
+  resize: 'vertical',
 }
 
 const searchLabelStyle: React.CSSProperties = { display: 'block', width: '100%', marginBlock: '14px 16px' }
-const searchInputStyle: React.CSSProperties = { ...fieldInputStyle, width: '100%', maxWidth: '100%' }
+
+/**
+ * Metrics for the two native controls the primitives do not cover.
+ *
+ * `@deepseek-ai/dsh-client-ui-primitives` renders text inputs, checkboxes,
+ * switches, segmented controls, tags, and dots, but no `select` and no
+ * `textarea`. The workspace picker needs an open-ended option list and the
+ * command is multi-line, so both stay native and borrow the panel's field
+ * metrics to sit level with the official `Input` beside them.
+ */
+const selectStyle: React.CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  height: 32,
+  padding: '0 8px',
+  fontSize: 14,
+  lineHeight: '22px',
+  color: COLORS.text,
+  background: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+  border: '0.5px solid var(--dsw-alias-border-l4, ' + COLORS.border + ')',
+  borderRadius: 'var(--dsw-radius-md, ' + RADIUS_CTRL + ')',
+}
 
 const cardStyle: React.CSSProperties = {
   background: COLORS.surface,
@@ -258,13 +248,8 @@ const cardHeaderRowStyle: React.CSSProperties = { display: 'flex', alignItems: '
 const cardTitleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 15, lineHeight: '22px', color: COLORS.text }
 const codeStyle: React.CSSProperties = { fontFamily: MONO_FONT, fontSize: 12, color: COLORS.textSecondary }
 const codeCaptionStyle: React.CSSProperties = { fontFamily: MONO_FONT, fontSize: 12, color: COLORS.textTertiary }
-const toolCountChipStyle: React.CSSProperties = {
-  ...chipBase,
-  marginInlineStart: 'auto',
-  color: COLORS.textTertiary,
-  background: COLORS.surfaceSubtle,
-  borderColor: COLORS.borderSubtle,
-}
+/** Let an inline `Tag` sit at the end of a flex row without stretching. */
+const tagRailStyle: React.CSSProperties = { marginInlineStart: 'auto' }
 const metaLineStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -275,16 +260,10 @@ const metaLineStyle: React.CSSProperties = {
   lineHeight: '18px',
   marginBlock: '8px 0',
 }
-const metaTagStyle: React.CSSProperties = {
-  flex: '0 0 auto',
-  fontFamily: MONO_FONT,
-  fontSize: 11,
-  lineHeight: '16px',
-  color: COLORS.textTertiary,
-  background: COLORS.surfaceRaised,
-  borderRadius: 4,
-  padding: '0 6px',
-}
+/** Positioning only: `Tag` owns the palette, so a render site may space it. */
+const metaTagStyle: React.CSSProperties = { flex: '0 0 auto' }
+/** Keeps the status dot and its label on one optical line inside a `Tag`. */
+const statusBadgeStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6 }
 const metaCodeStyle: React.CSSProperties = {
   ...codeCaptionStyle,
   minWidth: 0,
@@ -663,7 +642,7 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
   const reload = (server: ManagedServerView): void => { void run(() => api.reloadServer({ id: server.id })) }
 
   /** The policy row the official form should hold after one tool checkbox flips. */
-  const setToolEnabled = (server: ManagedServerView, tool: ManagedToolView, enabled: boolean): void => {
+  const toggleTool = (server: ManagedServerView, tool: ManagedToolView, enabled: boolean): void => {
     const disabled = (snapshot?.tools ?? [])
       .filter(candidate => candidate.serverId === server.id)
       .filter(candidate => candidate.name === tool.name ? !enabled : !candidate.enabled)
@@ -679,8 +658,8 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
       <header style={headerStyle}>
         <div style={headerRowStyle}>
           <h2 style={titleStyle}>{t('title')}</h2>
-          <button type="button" data-variant="primary" style={buttonPrimaryStyle} onClick={() => setDraft(draftFromServer(undefined, defaultScope))} disabled={busy || !canWrite(defaultScope)}>{t('add')}</button>
-          <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => { if (snapshot !== undefined) void run(() => api.snapshot({ projectPath })) }} disabled={busy}>{t('refresh')}</button>
+          <Button variant="primary" onClick={() => setDraft(draftFromServer(undefined, defaultScope))} disabled={busy || !canWrite(defaultScope)}>{t('add')}</Button>
+          <Button variant="outline" onClick={() => { if (snapshot !== undefined) void run(() => api.snapshot({ projectPath })) }} disabled={busy}>{t('refresh')}</Button>
         </div>
         <div style={subtitleRowStyle}>
           <span style={metaLabelStyle}>{t('pluginId')}</span>
@@ -689,13 +668,15 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
       </header>
       <label style={searchLabelStyle}>
         <span style={fieldLabelStyle}>{t('search')}</span>
-        <input type="search" style={searchInputStyle} value={query} onChange={event => setQuery(event.currentTarget.value)} placeholder={t('searchHint')} />
+        <Input className={FILL} type="search" value={query} onChange={event => setQuery(event.currentTarget.value)} placeholder={t('searchHint')} />
       </label>
       {snapshot !== undefined && (snapshot.workspaces ?? []).length > 0 ? <label style={searchLabelStyle}>
         <span style={fieldLabelStyle}>{t('project')}</span>
+        {/* A native `select` on purpose: the workspace list is open-ended, and
+            the primitives offer only a fixed-option `SegmentedControl`. */}
         <select
           data-mcp-project=""
-          style={fieldInputStyle}
+          style={selectStyle}
           value={projectPath ?? ''}
           onChange={event => setProjectPath(event.currentTarget.value === '' ? undefined : event.currentTarget.value)}
         >
@@ -708,9 +689,9 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
         <summary style={summaryStyle}>{t('sources')} ({(snapshot.sources ?? []).length})</summary>
         {(snapshot.sources ?? []).map(source => <div key={`${source.scope}:${source.path}`} style={readonlyItemStyle} data-mcp-source={source.scope}>
           <div style={readonlyHeaderRowStyle}>
-            <span style={metaTagStyle}>{t(SCOPE_KEYS[source.scope])}{source.compat ? ` · ${t('sourceCompat')}` : ''}</span>
+            <Tag tone="outline">{t(SCOPE_KEYS[source.scope])}{source.compat ? ` · ${t('sourceCompat')}` : ''}</Tag>
             <code style={codeCaptionStyle}>{source.path}</code>
-            <span style={toolCountChipStyle}>{source.serverCount} {t('serverCount')}</span>
+            <span style={tagRailStyle}><Tag tone="neutral">{source.serverCount} {t('serverCount')}</Tag></span>
             <span style={readonlyStatusStyle}>{source.exists ? (source.writable ? t('sourceWritable') : t('sourceReadonly')) : t('sourceMissing')}</span>
           </div>
           {source.error !== undefined ? <p role="alert" style={errorBoxStyle}>{source.error}</p> : null}
@@ -720,8 +701,8 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
       </details> : null}
       {message !== undefined ? <p role={isConflictMessage ? 'status' : 'alert'} style={isConflictMessage ? noticeBoxStyle : errorBoxStyle}>
         {message}
-        {isConflictMessage ? <button type="button" data-variant="ghost" style={{ ...buttonGhostStyle, marginInlineStart: 8 }} onClick={rebase}>{t('rebase')}</button> : null}
-        {!isConflictMessage ? <button type="button" data-variant="ghost" style={{ ...buttonGhostStyle, marginInlineStart: 8, padding: '2px 8px' }} onClick={() => setMessage(undefined)} aria-label={t('dismiss')}>✕</button> : null}
+        {isConflictMessage ? <Button variant="outline" style={{ marginInlineStart: 8 }} onClick={rebase}>{t('rebase')}</Button> : null}
+        {!isConflictMessage ? <Button variant="ghost" style={{ marginInlineStart: 8 }} onClick={() => setMessage(undefined)} aria-label={t('dismiss')}>✕</Button> : null}
       </p> : null}
       {pollFailed && state.status === 'ready' ? <p role="status" style={noticeBoxStyle}>{t('pollFailed')}</p> : null}
       {state.status === 'loading' ? <p role="status" style={statusTextStyle}>{t('loading')}</p> : null}
@@ -740,56 +721,78 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
           onReload={() => { reload(server) }}
           onRemove={() => { remove(server) }}
           onMigrate={() => { migrate(server) }}
-          onToolToggle={(tool, enabled) => { setToolEnabled(server, tool, enabled) }}
+          onToolToggle={(tool, enabled) => { toggleTool(server, tool, enabled) }}
         />
       ))}
       {draft !== undefined ? (
-        <form onSubmit={event => { void save(event) }} style={cardStyle}>
+         <form onSubmit={event => { void save(event) }} style={cardStyle}>
           <h3 style={formTitleStyle}>{draft.id.length > 0 && snapshot?.servers.some(server => server.id === draft.id) ? t('edit') : t('add')}</h3>
           <fieldset style={fieldsetStyle}>
             <legend style={legendStyle}>{t('basic')}</legend>
-            <Field label={t('id')}><input style={fieldInputStyle} required pattern={SERVER_ID_PATTERN} value={draft.id} disabled={snapshot?.servers.some(server => server.id === draft.id)} onChange={event => setDraft({ ...draft, id: event.currentTarget.value })} /></Field>
-            <Field label={t('label')}><input style={fieldInputStyle} value={draft.label} onChange={event => setDraft({ ...draft, label: event.currentTarget.value })} /></Field>
-            <Field label={t('scope')}>
-              <select data-mcp-scope-select="" style={fieldInputStyle} value={draft.scope} onChange={event => setDraft({ ...draft, scope: event.currentTarget.value as ServerDraft['scope'] })}>
-                {(['project', 'profile', 'user', 'entry'] as const).map(scope =>
-                  <option key={scope} value={scope} disabled={(scope === 'project' && projectPath === undefined) || (scope === 'entry' && !entryView.available)}>{t(SCOPE_KEYS[scope])}</option>)}
-              </select>
-            </Field>
-            <Field label={t('transport')}>
-              <select style={fieldInputStyle} value={draft.transport} onChange={event => setDraft({ ...draft, transport: event.currentTarget.value as ServerDraft['transport'] })}>
-                <option value="stdio">{t('stdio')}</option>
-                <option value="streamable-http">{t('http')}</option>
-              </select>
-            </Field>
+            <Field label={t('id')}><Input className={FILL} required pattern={SERVER_ID_PATTERN} value={draft.id} disabled={snapshot?.servers.some(server => server.id === draft.id)} onChange={event => setDraft({ ...draft, id: event.currentTarget.value })} /></Field>
+            <Field label={t('label')}><Input className={FILL} value={draft.label} onChange={event => setDraft({ ...draft, label: event.currentTarget.value })} /></Field>
+            <FieldGroup label={t('scope')}>
+              {/* A segmented control shows every scope at once, which is the
+                  point of a multi-scope store: the ones that cannot take the
+                  write are visible and disabled, with the reason on hover. */}
+              <span data-mcp-scope-select={draft.scope}>
+                <SegmentedControl
+                  id="mcp-scope"
+                  label={t('scope')}
+                  value={draft.scope}
+                  options={SCOPE_OPTIONS.map(scope => ({
+                    value: scope,
+                    label: t(SCOPE_KEYS[scope]),
+                    disabled: (scope === 'project' && projectPath === undefined) || (scope === 'entry' && !entryView.available),
+                    title: scope === 'project' && projectPath === undefined ? t('projectHint') : undefined,
+                  }))}
+                  onChange={scope => setDraft({ ...draft, scope })}
+                />
+              </span>
+            </FieldGroup>
+            <FieldGroup label={t('transport')}>
+              <SegmentedControl
+                id="mcp-transport"
+                label={t('transport')}
+                value={draft.transport}
+                options={TRANSPORT_OPTIONS.map(option => ({ ...option, label: t(option.label) }))}
+                onChange={transport => setDraft({ ...draft, transport })}
+              />
+            </FieldGroup>
             {draft.transport === 'stdio' ? <>
               <Field label={t('command')}><textarea style={textareaStyle} rows={2} required value={draft.command} onChange={event => setDraft({ ...draft, command: event.currentTarget.value })} /></Field>
               <ArgsFields entries={draft.args} t={t} onChange={args => setDraft({ ...draft, args })} />
-              <Field label={t('cwd')}><input style={fieldInputStyle} value={draft.cwd} onChange={event => setDraft({ ...draft, cwd: event.currentTarget.value })} /></Field>
+              <Field label={t('cwd')}><Input className={FILL} value={draft.cwd} onChange={event => setDraft({ ...draft, cwd: event.currentTarget.value })} /></Field>
               <SecretFields label={t('environment')} entries={draft.env} t={t} onChange={env => setDraft({ ...draft, env })} />
             </> : <>
-              <Field label={t('url')}><input style={fieldInputStyle} type="url" required value={draft.url} onChange={event => setDraft({ ...draft, url: event.currentTarget.value })} /></Field>
+              <Field label={t('url')}><Input className={FILL} type="url" required value={draft.url} onChange={event => setDraft({ ...draft, url: event.currentTarget.value })} /></Field>
               <SecretFields label={t('headers')} entries={draft.headers} t={t} onChange={headers => setDraft({ ...draft, headers })} />
             </>}
           </fieldset>
           <fieldset style={fieldsetStyle}>
             <legend style={legendStyle}>{t('advanced')}</legend>
             <div style={formGridStyle}>
-              <Field label={t('timeout')} style={gridFieldStyle}><input style={fieldInputStyle} type="number" min={1} step={1} value={draft.timeout} onChange={event => setDraft({ ...draft, timeout: event.currentTarget.value })} /></Field>
+              <Field label={t('timeout')} style={gridFieldStyle}><Input className={FILL} type="number" min={1} step={1} value={draft.timeout} onChange={event => setDraft({ ...draft, timeout: event.currentTarget.value })} /></Field>
             </div>
             <details style={collapseStyle}>
               <summary style={summaryStyle}>{t('reconnect')}</summary>
-              <label style={checkRowStyle}><input style={checkStyle} type="checkbox" checked={draft.reconnectEnabled} onChange={event => setDraft({ ...draft, reconnectEnabled: event.currentTarget.checked })} /> {t('reconnectEnabled')}</label>
+              {/* `Switch` renders an accessible `role="switch"` button that
+                  owns its own `aria-label`, so the row draws the visible copy
+                  beside it rather than nesting a control in a label. */}
+              <div style={checkRowStyle}>
+                <Switch checked={draft.reconnectEnabled} label={t('reconnectEnabled')} onChange={next => setDraft({ ...draft, reconnectEnabled: next })} />
+                <span>{t('reconnectEnabled')}</span>
+              </div>
               <div style={formGridStyle}>
-                <Field label={t('initialDelay')} style={gridFieldStyle}><input style={fieldInputStyle} type="number" min={1} step={1} value={draft.initialDelayMs} onChange={event => setDraft({ ...draft, initialDelayMs: event.currentTarget.value })} /></Field>
-                <Field label={t('maxDelay')} style={gridFieldStyle}><input style={fieldInputStyle} type="number" min={1} step={1} value={draft.maxDelayMs} onChange={event => setDraft({ ...draft, maxDelayMs: event.currentTarget.value })} /></Field>
-                <Field label={t('maxAttempts')} style={gridFieldStyle}><input style={fieldInputStyle} type="number" min={1} step={1} value={draft.maxAttempts} onChange={event => setDraft({ ...draft, maxAttempts: event.currentTarget.value })} /></Field>
+                <Field label={t('initialDelay')} style={gridFieldStyle}><Input className={FILL} type="number" min={1} step={1} value={draft.initialDelayMs} onChange={event => setDraft({ ...draft, initialDelayMs: event.currentTarget.value })} /></Field>
+                <Field label={t('maxDelay')} style={gridFieldStyle}><Input className={FILL} type="number" min={1} step={1} value={draft.maxDelayMs} onChange={event => setDraft({ ...draft, maxDelayMs: event.currentTarget.value })} /></Field>
+                <Field label={t('maxAttempts')} style={gridFieldStyle}><Input className={FILL} type="number" min={1} step={1} value={draft.maxAttempts} onChange={event => setDraft({ ...draft, maxAttempts: event.currentTarget.value })} /></Field>
               </div>
             </details>
           </fieldset>
           <div style={formActionsStyle}>
-            <button type="submit" data-variant="primary" style={buttonPrimaryStyle} disabled={busy || !canWrite(draft.scope)}>{t('save')}</button>
-            <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => setDraft(undefined)} disabled={busy}>{t('cancel')}</button>
+            <Button type="submit" variant="primary" disabled={busy || !canWrite(draft.scope)}>{t('save')}</Button>
+            <Button variant="outline" onClick={() => setDraft(undefined)} disabled={busy}>{t('cancel')}</Button>
           </div>
         </form>
       ) : null}
@@ -799,7 +802,7 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
           <p style={hintStyle}>{t('readOnlyHint')}</p>
           <ul style={listStyle}>{snapshot.readonlyEntries.map(entry => <li key={entry.entryId} style={readonlyItemStyle}>
             <div style={readonlyHeaderRowStyle}>
-              <span style={sourceChip(entry.source)}>{entry.source === 'loader' ? t('sourceLoader') : `${t('sourcePreset')}: ${entry.sourceName ?? entry.sourceId ?? '—'}`}</span>
+              <Tag tone={entry.source === 'loader' ? 'neutral' : 'info'}>{entry.source === 'loader' ? t('sourceLoader') : `${t('sourcePreset')}: ${entry.sourceName ?? entry.sourceId ?? '—'}`}</Tag>
               <code style={codeStyle}>{entry.entryId}</code>
               <code style={codeCaptionStyle}>{entry.moduleName}</code>
             </div>
@@ -813,6 +816,20 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
 
 function Field({ label, children, style }: { label: string; children: ReactNode; style?: React.CSSProperties }): ReactNode {
   return <label style={{ display: 'block', marginBlock: 8, ...style }}><span style={fieldLabelStyle}>{label}</span>{children}</label>
+}
+
+/**
+ * One labelled row for a control that is not a single labelable element.
+ *
+ * `<label>` associates with exactly one form control, so wrapping a segmented
+ * control in one both mis-states the markup and strips the accessible name
+ * from each of its segments. A grouped control gets this `<div>` row instead.
+ */
+function FieldGroup({ label, children, style }: { label: string; children: ReactNode; style?: React.CSSProperties }): ReactNode {
+  return <div style={{ display: 'block', marginBlock: 8, ...style }}>
+    <span style={fieldLabelStyle}>{label}</span>
+    {children}
+  </div>
 }
 
 interface SecretFieldsProps {
@@ -830,35 +847,35 @@ function SecretFields({ label, entries, t, onChange }: SecretFieldsProps): React
       // A `${...}` template lives in the file and is resolved by the Host at
       // mount time; the panel never received its value and must not rewrite it.
       ? <div key={entry.uid} style={secretRowStyle} data-mcp-template={entry.key}>
-        <Field label={t('secretKey')} style={secretFieldStyle}><input style={fieldInputStyle} value={entry.key} readOnly /></Field>
+        <Field label={t('secretKey')} style={secretFieldStyle}><Input className={FILL} value={entry.key} readOnly /></Field>
         <p style={hintStyle} data-mcp-template-hint="">{t('secretTemplate')}</p>
       </div>
       : <div key={entry.uid} style={secretRowStyle}>
-      <Field label={t('secretKey')} style={secretFieldStyle}><input style={fieldInputStyle} value={entry.key} onChange={event => {
+      <Field label={t('secretKey')} style={secretFieldStyle}><Input className={FILL} value={entry.key} onChange={event => {
         const next = [...entries]
         next[index] = { ...entry, key: event.currentTarget.value }
         onChange(next)
       }} /></Field>
-      <Field label={t('secretValue')} style={secretFieldStyle}><input style={fieldInputStyle} type={entry.sensitive ? 'password' : 'text'} value={entry.value} disabled={entry.clear} placeholder={entry.clear ? t('secretUnset') : undefined} onChange={event => {
+      <Field label={t('secretValue')} style={secretFieldStyle}><Input className={FILL} type={entry.sensitive ? 'password' : 'text'} value={entry.value} disabled={entry.clear} placeholder={entry.clear ? t('secretUnset') : undefined} onChange={event => {
         const next = [...entries]
         next[index] = { ...entry, value: event.currentTarget.value }
         onChange(next)
       }} /></Field>
       <div style={secretActionsStyle}>
-        <label style={secretClearLabelStyle}><input style={checkStyle} type="checkbox" checked={entry.sensitive} onChange={event => {
-          const next = [...entries]
-          next[index] = { ...entry, sensitive: event.currentTarget.checked }
-          onChange(next)
-        }} /> {t('sensitive')}</label>
-        <label style={secretClearLabelStyle}><input style={checkStyle} type="checkbox" checked={entry.clear} onChange={event => {
-          const next = [...entries]
-          next[index] = { ...entry, clear: event.currentTarget.checked }
-          onChange(next)
-        }} /> {t('secretUnset')}</label>
-        <button type="button" data-variant="danger" style={buttonDangerStyle} onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</button>
+        <Checkbox label={t('sensitive')} checked={entry.sensitive} onChange={next => {
+          const updated = [...entries]
+          updated[index] = { ...entry, sensitive: next }
+          onChange(updated)
+        }} />
+        <Checkbox label={t('secretUnset')} checked={entry.clear} onChange={next => {
+          const updated = [...entries]
+          updated[index] = { ...entry, clear: next }
+          onChange(updated)
+        }} />
+        <Button variant="outline" data-mcp-danger="" onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</Button>
       </div>
     </div>)}
-    <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => onChange([...entries, newSecretDraft()])}>{t('addEntry')}</button>
+    <Button variant="outline" onClick={() => onChange([...entries, newSecretDraft()])}>{t('addEntry')}</Button>
   </fieldset>
 }
 
@@ -869,17 +886,17 @@ function ArgsFields({ entries, t, onChange }: { entries: readonly string[]; t: M
     <p style={hintStyle}>{t('argsHint')}</p>
     {entries.map((value, index) => <div key={index} style={secretRowStyle}>
       <Field label={`${t('argument')} ${index + 1}`} style={secretFieldStyle}>
-        <input style={fieldInputStyle} value={value} onChange={event => {
+        <Input className={FILL} value={value} onChange={event => {
           const next = [...entries]
           next[index] = event.currentTarget.value
           onChange(next)
         }} />
       </Field>
       <div style={secretActionsStyle}>
-        <button type="button" data-variant="danger" style={buttonDangerStyle} onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</button>
+        <Button variant="outline" data-mcp-danger="" onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}>{t('remove')}</Button>
       </div>
     </div>)}
-    <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={() => onChange([...entries, ''])}>{t('addEntry')}</button>
+    <Button variant="outline" onClick={() => onChange([...entries, ''])}>{t('addEntry')}</Button>
   </fieldset>
 }
 
@@ -898,40 +915,45 @@ interface ServerCardProps {
 }
 
 function ServerCard({ server, tools, t, busy, writable, onEdit, onToggle, onReload, onRemove, onMigrate, onToolToggle }: ServerCardProps): ReactNode {
-  const tone = STATUS_TONES[server.status]
   const target = server.transport === 'stdio' ? server.command : server.url
   return <article data-mcp-server={server.id} style={cardStyle}>
     <div style={cardHeaderRowStyle}>
-      <span data-mcp-status={server.status} style={{ ...badgeBase, background: tone.surface }}>
-        <span aria-hidden="true" style={{ ...dotStyle, background: tone.dot }} />
-        {t(STATUS_KEYS[server.status])}
-      </span>
+      <Tag tone={TAG_TONES[server.status]}>
+        <span data-mcp-status={server.status} style={statusBadgeStyle}>
+          <StateDot state={DOT_STATES[server.status]} size={6} />
+          {t(STATUS_KEYS[server.status])}
+        </span>
+      </Tag>
       <strong style={cardTitleStyle}>{server.label}</strong>
       <code style={codeCaptionStyle}>{server.id}</code>
-      <span data-mcp-scope={server.scope} style={metaTagStyle}>{t(SCOPE_KEYS[server.scope])}</span>
+      <span data-mcp-scope={server.scope} style={metaTagStyle}><Tag tone="neutral">{t(SCOPE_KEYS[server.scope])}</Tag></span>
       {server.shadowed.length > 0
-        ? <span data-mcp-shadowed={server.shadowed.join(',')} style={metaTagStyle} title={server.shadowed.map(scope => t(SCOPE_KEYS[scope])).join(', ')}>{t('shadowed')}</span>
+        ? <span data-mcp-shadowed={server.shadowed.join(',')} style={metaTagStyle} title={server.shadowed.map(scope => t(SCOPE_KEYS[scope])).join(', ')}><Tag tone="warning">{t('shadowed')}</Tag></span>
         : null}
-      <span style={toolCountChipStyle}>{server.toolCount} {t('toolCount')}</span>
+      <span style={tagRailStyle}><Tag tone="outline">{server.toolCount} {t('toolCount')}</Tag></span>
     </div>
     <div style={metaLineStyle}>
-      <span style={metaTagStyle}>{server.transport === 'stdio' ? t('stdio') : t('http')}</span>
+      <Tag tone="quiet">{server.transport === 'stdio' ? t('stdio') : t('http')}</Tag>
       <code style={metaCodeStyle} title={target}>{target}</code>
     </div>
     {server.error !== undefined ? <p role="alert" style={errorBoxStyle}>{server.error}</p> : null}
     <div style={actionsRowStyle}>
-      <button type="button" data-variant="primary" style={buttonPrimaryStyle} onClick={onEdit} disabled={busy || !writable}>{t('edit')}</button>
-      <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={onToggle} disabled={busy || !writable}>{server.enabled ? t('disable') : t('enable')}</button>
-      <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={onReload} disabled={busy}>{t('reload')}</button>
+      <Button variant="primary" onClick={onEdit} disabled={busy || !writable}>{t('edit')}</Button>
+      <Button variant="outline" onClick={onToggle} disabled={busy || !writable}>{server.enabled ? t('disable') : t('enable')}</Button>
+      <Button variant="outline" onClick={onReload} disabled={busy}>{t('reload')}</Button>
       {server.scope === 'entry'
-        ? <button type="button" data-variant="ghost" style={buttonGhostStyle} onClick={onMigrate} disabled={busy || !writable}>{t('migrate')}</button>
+        ? <Button variant="outline" onClick={onMigrate} disabled={busy || !writable}>{t('migrate')}</Button>
         : null}
-      <button type="button" data-variant="danger" style={{ ...buttonDangerStyle, marginInlineStart: 'auto' }} onClick={onRemove} disabled={busy || !writable}>{t('remove')}</button>
+      <Button variant="outline" data-mcp-danger="" style={tagRailStyle} onClick={onRemove} disabled={busy || !writable}>{t('remove')}</Button>
     </div>
     <details style={collapseStyle}>
       <summary style={summaryStyle}>{t('tools')} ({tools.length})</summary>
       {tools.length === 0 ? <p style={statusTextStyle}>{t('noTools')}</p> : <ul style={listStyle}>{tools.map(tool => <li key={tool.name} style={toolItemStyle}>
-        <label style={toolRowStyle}><input style={checkStyle} type="checkbox" checked={tool.enabled} onChange={event => onToolToggle(tool, event.currentTarget.checked)} disabled={busy || !writable} /> <code style={codeStyle}>{tool.name}</code> <span style={toolDescriptionStyle}>{tool.description}</span></label>
+        <div style={toolRowStyle}>
+          <Checkbox label={tool.name} checked={tool.enabled} onChange={next => onToolToggle(tool, next)} disabled={busy || !writable} />
+          <code style={codeStyle}>{tool.name}</code>
+          <span style={toolDescriptionStyle}>{tool.description}</span>
+        </div>
         <details style={paramDetailsStyle}>
           <summary style={summaryStyle}>JSON {t('params')}</summary>
           <pre style={preStyle}>{JSON.stringify(tool.parameters, null, 2)}</pre>
