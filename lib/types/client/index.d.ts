@@ -9,7 +9,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 export declare const NS: "settings.mcpManager";
 /**
- * `configForms` is the settings provider's shared form service. The panel
+ * `configForms` is the settings provider's shared form service; the panel
  * writes the Loader-entry scope through it, so the page only renders once that
  * service exists.
  */

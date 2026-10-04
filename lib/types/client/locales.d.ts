@@ -8,7 +8,10 @@ export declare const zh: {
     readonly save: "保存";
     readonly cancel: "取消";
     readonly remove: "删除";
-    readonly confirmRemove: "确定删除这个 MCP 服务吗？";
+    readonly confirm: "删除";
+    readonly removeTitle: "删除 MCP 服务";
+    readonly removeDescription: "删除后该服务定义与逐工具开关都会被移除，且无法撤销。";
+    readonly removeAcknowledge: "我明白这会删除该服务的配置";
     readonly reload: "重新加载";
     readonly enabled: "已启用";
     readonly disabled: "已停用";

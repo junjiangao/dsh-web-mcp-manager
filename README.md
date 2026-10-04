@@ -153,10 +153,23 @@ against both ends of the supported train.
 dsh share one schema instance; the profile therefore installs no
 `@deepseek-ai/*` package for this plugin at all.
 
+The page's Host view lives in `@deepseek-ai/dsh-client-store`, the snapshot
+store the Web shell seeds for every plugin: one reference-stable snapshot, one
+subscription, and a single write face, read through `useSyncExternalStore`.
+Keeping the load rule there rather than in component effects is what makes it
+directly testable — "only the newest request may publish", "a failed background
+read never discards a standing snapshot", and "a poll never clears an action
+message" are asserted against a fake transport, with no clock involved.
+
+Deleting a definition is destructive (it takes the per-tool policy with it and
+has no undo), so it goes through the official `RiskConfirmation` dialog — a
+warning, an acknowledgement checkbox, and a confirm that stays disabled until
+it is ticked — rather than a blocking `window.confirm`.
+
 Interactive chrome comes from `@deepseek-ai/dsh-client-ui-primitives`
 (`Button`, `Input`, `Checkbox`, `Switch`, `Tag`, `StateDot`,
-`SegmentedControl`), which the Web shell already bundles and serves through its
-shared module table — the plugin only declares it, never installs it. That
+`SegmentedControl`, `RiskConfirmation`), which the Web shell already bundles and
+serves through its shared module table — the plugin only declares it, never installs it. That
 package publishes one flat ESM bundle whose undeclared imports include
 `shiki`/`katex`/`micromark`, so it can only be loaded by a bundler or through
 that table; under Vitest the specifier resolves to `tests/stubs/ui-primitives.tsx`,

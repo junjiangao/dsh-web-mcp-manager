@@ -7,6 +7,7 @@ import type { ManagedServerView, Snapshot } from '../src/types.ts'
 import { McpSection, type McpSectionProps } from '../src/client/McpSection.tsx'
 import type { ManagerClientApi } from '../src/client/api.ts'
 import type { EntryFormFace } from '../src/client/entry-form.ts'
+import { createManagerStore, type ManagerStore } from '../src/client/manager-store.ts'
 
 function view(overrides: Partial<ManagedServerView> = {}): ManagedServerView {
   return {
@@ -47,6 +48,7 @@ function makeApi(): ManagerClientApi {
 
 let api: ManagerClientApi
 let entry: EntryFormFace
+let store: ManagerStore
 
 const t = ((key: string) => key) as unknown as McpSectionProps['t']
 
@@ -66,7 +68,10 @@ function renderPanel(entryView: { available: boolean; writable: boolean } = { av
     setEnabled: vi.fn(async () => true),
     setDisabledTools: vi.fn(async () => true),
   }
-  return render(<McpSection api={api} entry={entry} t={t} />)
+  // The real store over a fake transport: the read rule under test is the
+  // store's, and `manager-store.spec.ts` covers it directly.
+  store = createManagerStore(api)
+  return render(<McpSection api={api} entry={entry} store={store} t={t} />)
 }
 
 async function openEditor(server = view()): Promise<{ container: HTMLElement }> {
@@ -131,11 +136,12 @@ describe('McpSection conflict-safe editing', () => {
     await waitFor(() => expect(screen.getByText('conflict')).toBeTruthy())
     expect(screen.getByText('rebase')).toBeTruthy()
     expect(container.querySelector('form')).not.toBeNull()
-    // 下一次轮询成功不应清除操作消息
-    const poll = setInterval(() => {}, 50)
-    clearInterval(poll)
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
-    expect(screen.getByText('conflict')).toBeTruthy()
+    // The message belongs to the user's last operation, so the next one clears
+    // it. That a *background* read cannot clear it is asserted against the
+    // store, where the read loop is drivable.
+    await act(async () => { await store.refresh() })
+    expect(screen.queryByText('conflict')).toBeNull()
+    expect(container.querySelector('form')).not.toBeNull()
   })
 
   it('emits { clear: true } for env rows removed from the draft', async () => {
@@ -163,23 +169,21 @@ describe('McpSection conflict-safe editing', () => {
     expect(document.activeElement).toBe(keyInput)
   })
 
-  it('discards a stale poll response that arrives after a newer snapshot', async () => {
+  it('renders only the newest answer when a slow read settles last', async () => {
     api = makeApi()
-    let resolvePoll!: (value: Snapshot) => void
-    const pollPromise = new Promise<Snapshot>(resolve => { resolvePoll = resolve })
+    let resolveSlow!: (value: Snapshot) => void
+    const slow = new Promise<Snapshot>(resolve => { resolveSlow = resolve })
     ;(api.snapshot as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(snapshot([view({ label: 'OLD' })]))
-      .mockImplementationOnce(() => pollPromise)
+      .mockImplementationOnce(() => slow)
       .mockResolvedValueOnce(snapshot([view({ label: 'NEW' })]))
     renderPanel()
     await waitFor(() => expect(screen.getByText('OLD')).toBeTruthy())
-    // 第二次轮询(挂起)
-    await new Promise(resolve => setTimeout(resolve, 2_100))
-    // 手动刷新 → 更新快照
-    fireEvent.click(screen.getByText('refresh'))
+    // Two overlapping reads; the second publishes, then the first settles late.
+    const stale = store.refresh()
+    await store.refresh()
     await waitFor(() => expect(screen.getByText('NEW')).toBeTruthy())
-    // 迟到的旧轮询响应到达,应被丢弃
-    await act(async () => { resolvePoll(snapshot([view({ label: 'OLD' })])) })
+    await act(async () => { resolveSlow(snapshot([view({ label: 'OLD' })])); await stale })
     expect(screen.queryByText('OLD')).toBeNull()
     expect(screen.getByText('NEW')).toBeTruthy()
   })
@@ -240,16 +244,33 @@ describe('McpSection write routing', () => {
     await waitFor(() => expect(entry.setDisabledTools).toHaveBeenCalledWith('demo', ['mcp__demo__one', 'mcp__demo__two']))
   })
 
-  it('clears the per-tool policy row after deleting a file-scope definition', async () => {
+  it('deletes a file-scope definition only after the acknowledgement, then clears its policy row', async () => {
     api = makeApi()
     api.snapshot.mockResolvedValue(snapshot([view({ scope: 'profile' })]))
     ;(api.removeServer as ReturnType<typeof vi.fn>).mockResolvedValue(snapshot([]))
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     renderPanel()
     await waitFor(() => expect(screen.getByText('remove')).toBeTruthy())
     fireEvent.click(screen.getByText('remove'))
+    // The dialog is the gate: nothing is deleted until it is confirmed.
+    expect(screen.getByRole('dialog', { name: 'removeTitle' })).toBeTruthy()
+    expect(api.removeServer).not.toHaveBeenCalled()
+    expect((screen.getByText('confirm') as HTMLButtonElement).closest('button')?.disabled).toBe(true)
+
+    fireEvent.click(screen.getByLabelText('removeAcknowledge'))
+    fireEvent.click(screen.getByText('confirm'))
     await waitFor(() => expect(api.removeServer).toHaveBeenCalled())
     await waitFor(() => expect(entry.setDisabledTools).toHaveBeenCalledWith('demo', undefined))
+  })
+
+  it('leaves the definition alone when the confirmation is cancelled', async () => {
+    api = makeApi()
+    api.snapshot.mockResolvedValue(snapshot([view({ scope: 'profile' })]))
+    renderPanel()
+    await waitFor(() => expect(screen.getByText('remove')).toBeTruthy())
+    fireEvent.click(screen.getByText('remove'))
+    fireEvent.click(screen.getByText('cancel'))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(api.removeServer).not.toHaveBeenCalled()
   })
 })
 

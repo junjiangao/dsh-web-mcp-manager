@@ -97,6 +97,45 @@ export const Input = React.forwardRef(function Input(
   )
 })
 
+/**
+ * Real: a `Modal` carrying a warning, an acknowledgement checkbox, and the
+ * Cancel/Confirm footer; the confirm stays disabled until the box is ticked.
+ * This double omits the portal and the mask, which jsdom cannot assert on
+ * anyway, and keeps the parts a test drives: the checkbox and the two actions.
+ */
+export function RiskConfirmation({ open, title, description, acknowledgeLabel, cancelLabel, confirmLabel, acknowledged, disabled = false, onAcknowledgedChange, onCancel, onConfirm }: {
+  open: boolean
+  title: string
+  description: string
+  acknowledgeLabel: string
+  cancelLabel: string
+  closeLabel: string
+  confirmLabel: string
+  acknowledged: boolean
+  disabled?: boolean
+  onAcknowledgedChange: (acknowledged: boolean) => void
+  onCancel: () => void
+  onConfirm: () => void
+}): React.JSX.Element | null {
+  if (!open) return null
+  return (
+    <div role="dialog" aria-label={title}>
+      <p>{description}</p>
+      <label>
+        <input
+          type="checkbox"
+          checked={acknowledged}
+          disabled={disabled}
+          onChange={event => { onAcknowledgedChange(event.currentTarget.checked) }}
+        />
+        <span>{acknowledgeLabel}</span>
+      </label>
+      <button type="button" onClick={onCancel}>{cancelLabel}</button>
+      <button type="button" disabled={disabled || !acknowledged} onClick={onConfirm}>{confirmLabel}</button>
+    </div>
+  )
+}
+
 export interface SegmentedControlOption<Value extends string> {
   value: Value
   label: string

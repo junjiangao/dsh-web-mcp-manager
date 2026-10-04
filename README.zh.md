@@ -126,8 +126,17 @@ dsh 还会在加载插件前执行兼容门：运行版本不满足某个 `@deep
 `@deepseek-ai/schemastery` 声明为 peer 而非 dependency，使插件与 dsh 共用同一个 schema
 实例；profile 因此不会为本插件安装任何 `@deepseek-ai/*` 包。
 
+面板的 Host 视图存放在 `@deepseek-ai/dsh-client-store`（Web shell 为每个插件提供的
+snapshot store）：一份引用稳定的快照、一个订阅、一套写入口，组件用
+`useSyncExternalStore` 读取。把加载规则放在这里而不是组件 effect 里，是为了让它可被直接
+断言 —— “只有最新请求能发布”“后台读失败不丢弃已有快照”“轮询不会清掉操作消息”现在都是
+对着假传输的用例，不依赖时钟。
+
+删除服务定义会连带移除其逐工具策略且无法撤销，因此走官方 `RiskConfirmation` 弹窗（警示
+文案 + 必须勾选确认 + 勾选前禁用的确认按钮），而不是阻塞式 `window.confirm`。
+
 交互控件来自 `@deepseek-ai/dsh-client-ui-primitives`（`Button`、`Input`、`Checkbox`、
-`Switch`、`Tag`、`StateDot`、`SegmentedControl`）。Web shell 已经打包该包并通过共享
+`Switch`、`Tag`、`StateDot`、`SegmentedControl`、`RiskConfirmation`）。Web shell 已经打包该包并通过共享
 module table 提供它，插件只声明、不安装。它发布的是单个扁平 ESM bundle，其中还引用了
 `shiki`/`katex`/`micromark` 等未声明的依赖，因此只能由打包器或该 module table 加载；
 在 Vitest 下该 specifier 解析到 `tests/stubs/ui-primitives.tsx`（复刻官方 DOM 的替身），

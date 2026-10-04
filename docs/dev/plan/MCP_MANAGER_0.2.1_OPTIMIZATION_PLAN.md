@@ -11,8 +11,9 @@
 > | P1b 面板 | ✅ 已落地 | 层级徽标、遮盖标注、来源列表、工作区选择、模板只读行、迁移按钮 |
 > | P2-1 官方 UI 基元 | ✅ 已落地 | `Button` / `Input` / `Checkbox` / `Switch` / `Tag` / `StateDot` / `SegmentedControl` |
 > | P2-2 官方 `configForms` | ✅ 已落地 | entry 层读写改走官方共享表单；Host 侧 entry 写入路径整体删除 |
+> | P2-3 官方 store + 确认弹窗 | ✅ 已落地 | `manager-store.ts`（`createSnapshotStore`）、`RiskConfirmation` |
 >
-> 验收：`pnpm typecheck` 通过；**101 个用例 / 13 个文件**全绿；`pnpm build` 字节级幂等且 `lib/` 已提交；
+> 验收：`pnpm typecheck` 通过；**110 个用例 / 14 个文件**全绿；`pnpm build` 字节级幂等且 `lib/` 已提交；
 > `pnpm check:compat` 对 `0.2.0-rc.1` 与 `0.2.1-alpha.1` 均通过；
 > `pnpm install --frozen-lockfile` 通过。
 
@@ -432,11 +433,26 @@ RPC 端点从 6 个减到 5 个，且**只覆盖 `mcp.json` 各 scope 与运行�
 
 顺带修正了一处无障碍语义：`SegmentedControl` 之前被包在 `<label>` 里（一个 `<label>` 只能关联一个表单控件），会使每个 segment 的可访问名变空；现在分组控件走新的 `FieldGroup`（`<div>` + 文案），`<label>` 只留给单个原生控件。
 
-### 6.3 未做（本次范围外）
+### 6.3 面板状态迁到官方 store（已完成）
 
-- 用官方 `dsh-client-store` 的 `createSnapshotStore` 替换手写轮询簿记（保留"单调 seq 丢弃过期响应"语义）。
-- 官方 `Modal` + `RiskConfirmation` 替换 `window.confirm` 的删除确认。
-- `locale/*.json` 的 `meta.title` / `meta.description` 多语言。
+`src/client/manager-store.ts` 用官方 `@deepseek-ai/dsh-client-store` 的 `createSnapshotStore` 持有面板的 Host 视图（`status` / `snapshot` / `error` / `pollFailed` / `busy` / `message` / `projectPath`），并在 `index.ts` 里和两个传输层并列创建，组件用 `useSyncExternalStore` 读它。组件只留真正的本地编辑态（`query`、`draft`）与一个新的确认弹窗态。
+
+这不是纯装饰性重构，收益是**可测性**：原先"单调 seq、只有最新请求能发布、后台读失败不丢弃已有快照、失败的后台读不碰操作消息"这套规则活在组件 effect 里，唯一能观察它的方式是一个等真实轮询周期的 jsdom 用例（2.1 s 睡眠）。现在它是 `manager-store.ts` 里对着假传输就能直接断言的普通代码：`tests/manager-store.spec.ts` 用假定时器覆盖全部规则，面板 spec 里那个 2.1 s 的等待被删除，jsdom 用例从 2442 ms 降到 340 ms。
+
+顺带修正一处语义：卸载页面时 `AbortController` 触发的中止不再被记成"轮询失败"（`signal.aborted` 直接返回），这是刻意拆除，不是故障。
+
+### 6.4 删除确认改用官方 `RiskConfirmation`（已完成）
+
+`window.confirm` 换成官方 `RiskConfirmation`（内部就是 `Modal`）：带警示文案、必须勾选"我明白这会删除该服务的配置"、确认按钮在勾选前禁用，并提供取消与关闭。删除一个服务定义会同时移除它的逐工具策略且无法撤销，值得一道显式确认；迁移只是复制，不加确认。
+
+### 6.5 `locale/*.json` 的 `meta` 多语言（此前已完成）
+
+核对结论：`dsh-app-boot` 的 `readPluginMeta` 读 `<specifier>/locale/en.json`，再用同目录下所有 `*.json` 组字典，取值路径是 `parsed.meta.title` / `parsed.meta.description`；`package.json` 的 `exports` 里有 `"./locale/*.json"`。本仓库的 `locale/zh.json`、`locale/en.json` 早已是 `{"meta": {"title", "description"}}` 结构，与读取路径一致，**无需改动**。
+
+### 6.6 仍未做（方案内的可选项）
+
+- `package.json` 的插件 `icon`：官方 `readPluginMeta` 支持 SVG/PNG/JPEG/WebP ≤256 KiB，但需要一个真实图标资源，属于品牌决策，未擅自生成。
+- `scripts/verify-upgrade.mjs`：在临时目录用两个 `@deepseek-ai/*` 版本各 `tsc --noEmit` 一遍 `src/`，覆盖"类型面漂移"。当前 `check:compat`（版本门）+ `dependency-surface`（解析面）已覆盖声明区间，该脚本是更重的双装校验，暂缓。
 
 ---
 
@@ -454,6 +470,7 @@ RPC 端点从 6 个减到 5 个，且**只覆盖 `mcp.json` 各 scope 与运行�
 | **P1-4** | 面板：来源徽标、scope 选择、只读遮盖提示、迁移入口 | `src/client/McpSection.tsx` `src/client/draft.ts` `src/client/locales.ts` `locale/*.json` `tests/McpSection.spec.tsx` | P1-3 |
 | **P2-1** | 官方 UI 基元迁移 | `src/client/McpSection.tsx` `package.json` `vitest.config.ts`(新) `tests/stubs/ui-primitives.tsx`(新) | P1-4 |
 | **P2-2** | entry 层读写改走官方 `configForms` | `src/client/entry-form.ts`(新) `src/client/McpSection.tsx` `src/client/index.ts` `src/client/api.ts` `src/host/controller.ts` `src/protocol.ts` `src/types.ts` `src/settings.ts` | P1-4 |
+| **P2-3** | 面板状态迁官方 `dsh-client-store`；删除确认改 `RiskConfirmation` | `src/client/manager-store.ts`(新) `src/client/McpSection.tsx` `src/client/index.ts` `src/client/locales.ts` `tests/manager-store.spec.ts`(新) `package.json` | P2-1 |
 
 **流程约束（沿用本仓库既有做法）**：
 

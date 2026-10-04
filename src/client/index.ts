@@ -10,6 +10,7 @@ import type { McpLocaleKey } from './locales.ts'
 import { en, zh } from './locales.ts'
 import { createManagerApi } from './api.ts'
 import { createEntryForm } from './entry-form.ts'
+import { createManagerStore } from './manager-store.ts'
 import { McpSection, type McpSectionInjected } from './McpSection.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -20,7 +21,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 export const NS = 'settings.mcpManager' as const
 /**
- * `configForms` is the settings provider's shared form service. The panel
+ * `configForms` is the settings provider's shared form service; the panel
  * writes the Loader-entry scope through it, so the page only renders once that
  * service exists.
  */
@@ -31,7 +32,10 @@ export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
   const api = createManagerApi(ctx)
   const entry = createEntryForm(ctx)
-  const injected = (): McpSectionInjected => ({ api, entry })
+  // The store lives beside the transports, not inside the component: one
+  // snapshot source per plugin instance, as the Web shell seeds it.
+  const store = createManagerStore(api)
+  const injected = (): McpSectionInjected => ({ api, entry, store })
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'mcp',

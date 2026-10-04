@@ -1,15 +1,16 @@
 /** Settings → MCP page. It intentionally owns no durable state. */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import {
-  Button, Checkbox, Input, SegmentedControl, StateDot, Switch, Tag,
+  Button, Checkbox, Input, RiskConfirmation, SegmentedControl, StateDot, Switch, Tag,
   type StateDotState, type TagTone,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ManagedServerView, ManagedToolView, McpScope, ReadonlyMcpEntry, SecretInput, Snapshot } from '../types.ts'
 import { PLUGIN_IDENTITY } from '../types.ts'
 import type { ManagerClientApi } from './api.ts'
 import type { EntryFormFace } from './entry-form.ts'
+import type { ManagerStore } from './manager-store.ts'
 import type { McpLocaleKey } from './locales.ts'
 import { SERVER_ID_PATTERN, draftFromServer, draftPatch, duplicateDraftKeys, newSecretDraft, type SecretDraft, type ServerDraft } from './draft.ts'
 
@@ -18,17 +19,14 @@ export interface McpSectionInjected {
   readonly api: ManagerClientApi
   /** The official shared settings form: the legacy Loader-entry scope. */
   readonly entry: EntryFormFace
+  /** The Host view and the read loop, in the official client store. */
+  readonly store: ManagerStore
 }
 
 export type McpSectionProps =
   PropsRuntime<'settings.section'>
   & PropsLocale<'settings.mcpManager'>
   & InjectFace<McpSectionInjected>
-
-type ViewState =
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; snapshot: Snapshot }
 
 const STATUS_KEYS: Record<ManagedServerView['status'], McpLocaleKey> = {
   disabled: 'disabled',
@@ -391,72 +389,16 @@ const readonlyStatusStyle: React.CSSProperties = { color: COLORS.textTertiary, f
 
 /* ------------------------------------------------------------------------------------------- */
 
-/**
- * Poll the snapshot while the page is visible.
- *
- * Guarantees: at most one request in flight per tick (slow responses are not
- * overlapped), and every response is tagged with the caller's monotonic `seq`
- * so a late poll response can never overwrite a newer snapshot produced by a
- * user operation or a newer poll.
- */
-function useVisiblePolling(
-  api: ManagerClientApi,
-  projectPath: string | undefined,
-  onSnapshot: (snapshot: Snapshot, seq: number) => void,
-  onError: (error: unknown, seq: number) => void,
-  nextSeq: () => number,
-): void {
-  useEffect(() => {
-    const controller = new AbortController()
-    let timer: ReturnType<typeof setInterval> | undefined
-    let inFlight = false
-    const load = (): void => {
-      if (document.visibilityState !== 'visible' || inFlight) return
-      inFlight = true
-      const seq = nextSeq()
-      void api.snapshot({ projectPath }, controller.signal).then(
-        snapshot => onSnapshot(snapshot, seq),
-        error => onError(error, seq),
-      ).finally(() => { inFlight = false })
-    }
-    const start = (): void => {
-      if (document.visibilityState !== 'visible' || timer !== undefined) return
-      timer = setInterval(() => { load() }, 2_000)
-    }
-    const stop = (): void => {
-      if (timer === undefined) return
-      clearInterval(timer)
-      timer = undefined
-    }
-    const visibility = (): void => {
-      stop()
-      if (document.visibilityState === 'visible') {
-        load()
-        start()
-      }
-    }
-    load()
-    start()
-    document.addEventListener('visibilitychange', visibility)
-    return () => {
-      controller.abort()
-      stop()
-      document.removeEventListener('visibilitychange', visibility)
-    }
-  }, [api, onError, onSnapshot, nextSeq, projectPath])
-}
-
-export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
-  const [state, setState] = useState<ViewState>({ status: 'loading' })
+export function McpSection({ api, entry, store, t }: McpSectionProps): ReactNode {
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState<ServerDraft | undefined>()
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState<string | undefined>()
-  const [pollFailed, setPollFailed] = useState(false)
-  /** Registered workspace the project scope is rooted at; `undefined` = none. */
-  const [projectPath, setProjectPath] = useState<string | undefined>()
+  /** The server whose removal is awaiting confirmation. */
+  const [pendingRemove, setPendingRemove] = useState<ManagedServerView | undefined>()
+  const [acknowledged, setAcknowledged] = useState(false)
   /** Availability and writability of the official form that owns the entry scope. */
   const entryView = useSyncExternalStore(entry.subscribe, entry.snapshot)
+  /** The Host view and its read loop, owned by the official client store. */
+  const view = useSyncExternalStore(store.state.subscribe, store.state.getSnapshot)
 
   // Scoped stylesheet for states inline styles cannot express; injected once per document.
   useEffect(() => {
@@ -467,38 +409,11 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
     document.head.append(style)
   }, [])
 
-  // Monotonic response sequence shared by polling, manual refresh, and user
-  // operations. A response whose seq is no longer current is discarded.
-  const seqRef = useRef(0)
-  const nextSeq = useCallback((): number => {
-    seqRef.current += 1
-    return seqRef.current
-  }, [])
+  // The store owns the visible-page read loop, so unmounting the page stops it.
+  useEffect(() => store.startPolling(), [store])
 
-  const accept = useCallback((snapshot: Snapshot, seq: number): void => {
-    if (seq !== seqRef.current) return
-    setState({ status: 'ready', snapshot })
-    setPollFailed(false)
-  }, [])
-
-  /** Polling failures never touch the user-operation message. */
-  const rejectPoll = useCallback((error: unknown, seq: number): void => {
-    if (seq !== seqRef.current) return
-    setPollFailed(true)
-    setState(previous => previous.status === 'ready' ? previous : {
-      status: 'error',
-      message: error instanceof Error ? error.message : String(error),
-    })
-  }, [])
-
-  /** User-operation failures set the action message; kept until the next operation. */
-  const rejectAction = useCallback((error: unknown): void => {
-    setMessage(error instanceof Error ? error.message : String(error))
-  }, [])
-
-  useVisiblePolling(api, projectPath, accept, rejectPoll, nextSeq)
-
-  const snapshot = state.status === 'ready' ? state.snapshot : undefined
+  const { busy, message, pollFailed, projectPath } = view
+  const snapshot = view.status === 'ready' ? view.snapshot : undefined
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const servers = useMemo(() => snapshot?.servers.filter(server => {
     if (normalizedQuery.length === 0) return true
@@ -545,54 +460,17 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
     }))
   }
 
-  const run = async (operation: () => Promise<Snapshot>): Promise<Snapshot | undefined> => {
-    setBusy(true)
-    setMessage(undefined)
-    try {
-      const seq = nextSeq()
-      const next = await operation()
-      accept(next, seq)
-      return next
-    } catch (error) {
-      rejectAction(error)
-      return undefined
-    }
-    finally { setBusy(false) }
-  }
-
-  /**
-   * Apply one official-form write, then re-read the resolved view.
-   *
-   * The form answers with acceptance rather than a snapshot: it owns revision
-   * fencing and recovery, so a refusal already reloaded the Host state. The
-   * panel therefore reports the refusal and re-reads through its own RPC, which
-   * stays the single place the merged `project → profile → user → entry` view
-   * is computed.
-   */
-  const runEntry = async (operation: () => Promise<boolean>): Promise<boolean> => {
-    setBusy(true)
-    setMessage(undefined)
-    try {
-      if (!await operation()) {
-        setMessage(t('conflict'))
-        return false
-      }
-      const seq = nextSeq()
-      accept(await api.snapshot({ projectPath }), seq)
-      return true
-    } catch (error) {
-      rejectAction(error)
-      return false
-    }
-    finally { setBusy(false) }
-  }
+  /** One RPC operation, through the store's sequence and message discipline. */
+  const run = store.run
+  /** One official-form write; a refusal is reported as the panel's conflict copy. */
+  const runEntry = (operation: () => Promise<boolean>): Promise<boolean> => store.runForm(operation, t('conflict'))
 
   const save = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
     if (snapshot === undefined || draft === undefined) return
     const duplicates = [...duplicateDraftKeys(draft.env), ...duplicateDraftKeys(draft.headers)]
     if (duplicates.length > 0) {
-      setMessage(`${t('duplicateKey')}: ${[...new Set(duplicates)].join(', ')}`)
+      store.notify(`${t('duplicateKey')}: ${[...new Set(duplicates)].join(', ')}`)
       return
     }
     const patch = draftPatch(draft)
@@ -610,7 +488,7 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
     if (snapshot === undefined || draft === undefined) return
     const current = snapshot.servers.find(server => server.id === draft.id)
     setDraft(current === undefined ? undefined : draftFromServer(current, defaultScope))
-    setMessage(undefined)
+    store.clearMessage()
   }
 
   const toggleServer = (server: ManagedServerView): void => {
@@ -623,8 +501,20 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
     void run(() => api.setServerEnabled({ id: server.id, enabled, projectPath }))
   }
 
+  /**
+   * Ask before deleting a definition.
+   *
+   * Removal drops the server and its per-tool policy with no undo, so it goes
+   * through the official acknowledgement dialog rather than a blocking
+   * `window.confirm`.
+   */
+  const askRemove = (server: ManagedServerView): void => {
+    setAcknowledged(false)
+    setPendingRemove(server)
+  }
+
   const remove = (server: ManagedServerView): void => {
-    if (snapshot === undefined || !window.confirm(t('confirmRemove'))) return
+    if (snapshot === undefined) return
     if (server.scope === 'entry') {
       void runEntry(() => entry.remove(server.id))
       return
@@ -659,7 +549,7 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
         <div style={headerRowStyle}>
           <h2 style={titleStyle}>{t('title')}</h2>
           <Button variant="primary" onClick={() => setDraft(draftFromServer(undefined, defaultScope))} disabled={busy || !canWrite(defaultScope)}>{t('add')}</Button>
-          <Button variant="outline" onClick={() => { if (snapshot !== undefined) void run(() => api.snapshot({ projectPath })) }} disabled={busy}>{t('refresh')}</Button>
+          <Button variant="outline" onClick={() => { void store.refresh() }} disabled={busy}>{t('refresh')}</Button>
         </div>
         <div style={subtitleRowStyle}>
           <span style={metaLabelStyle}>{t('pluginId')}</span>
@@ -678,7 +568,7 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
           data-mcp-project=""
           style={selectStyle}
           value={projectPath ?? ''}
-          onChange={event => setProjectPath(event.currentTarget.value === '' ? undefined : event.currentTarget.value)}
+          onChange={event => store.selectProject(event.currentTarget.value === '' ? undefined : event.currentTarget.value)}
         >
           <option value="">{t('projectNone')}</option>
           {(snapshot.workspaces ?? []).map(workspace => <option key={workspace.id} value={workspace.path}>{workspace.title} — {workspace.path}</option>)}
@@ -702,11 +592,11 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
       {message !== undefined ? <p role={isConflictMessage ? 'status' : 'alert'} style={isConflictMessage ? noticeBoxStyle : errorBoxStyle}>
         {message}
         {isConflictMessage ? <Button variant="outline" style={{ marginInlineStart: 8 }} onClick={rebase}>{t('rebase')}</Button> : null}
-        {!isConflictMessage ? <Button variant="ghost" style={{ marginInlineStart: 8 }} onClick={() => setMessage(undefined)} aria-label={t('dismiss')}>✕</Button> : null}
+        {!isConflictMessage ? <Button variant="ghost" style={{ marginInlineStart: 8 }} onClick={() => store.clearMessage()} aria-label={t('dismiss')}>✕</Button> : null}
       </p> : null}
-      {pollFailed && state.status === 'ready' ? <p role="status" style={noticeBoxStyle}>{t('pollFailed')}</p> : null}
-      {state.status === 'loading' ? <p role="status" style={statusTextStyle}>{t('loading')}</p> : null}
-      {state.status === 'error' ? <p role="alert" style={errorBoxStyle}>{state.message}</p> : null}
+      {pollFailed && view.status === 'ready' ? <p role="status" style={noticeBoxStyle}>{t('pollFailed')}</p> : null}
+      {view.status === 'loading' ? <p role="status" style={statusTextStyle}>{t('loading')}</p> : null}
+      {view.status === 'error' ? <p role="alert" style={errorBoxStyle}>{view.error}</p> : null}
       {snapshot !== undefined && servers.length === 0 ? <p style={emptyStateStyle}>{snapshot.servers.length === 0 ? t('noServers') : t('empty')}</p> : null}
       {servers.map(server => (
         <ServerCard
@@ -719,7 +609,7 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
           onEdit={() => setDraft(draftFromServer(server, defaultScope))}
           onToggle={() => { toggleServer(server) }}
           onReload={() => { reload(server) }}
-          onRemove={() => { remove(server) }}
+          onRemove={() => { askRemove(server) }}
           onMigrate={() => { migrate(server) }}
           onToolToggle={(tool, enabled) => { toggleTool(server, tool, enabled) }}
         />
@@ -810,6 +700,26 @@ export function McpSection({ api, entry, t }: McpSectionProps): ReactNode {
           </li>)}</ul>
         </details>
       ) : null}
+      {/* Deleting a definition also drops its per-tool policy, with no undo, so
+          the official acknowledgement dialog stands in front of it. */}
+      {pendingRemove !== undefined ? <RiskConfirmation
+        open
+        title={t('removeTitle')}
+        description={`${t('removeDescription')} ${pendingRemove.label} (${pendingRemove.id})`}
+        acknowledgeLabel={t('removeAcknowledge')}
+        cancelLabel={t('cancel')}
+        closeLabel={t('dismiss')}
+        confirmLabel={t('confirm')}
+        acknowledged={acknowledged}
+        disabled={busy}
+        onAcknowledgedChange={setAcknowledged}
+        onCancel={() => setPendingRemove(undefined)}
+        onConfirm={() => {
+          const target = pendingRemove
+          setPendingRemove(undefined)
+          remove(target)
+        }}
+      /> : null}
     </section>
   )
 }
