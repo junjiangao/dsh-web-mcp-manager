@@ -15,7 +15,7 @@
 > `pnpm check:compat` 对 `0.2.0-rc.1` 与 `0.2.1-alpha.1` 均通过。
 
 - 仓库：`/work/Repos/github/dsh-web-mcp-manager`（分支 `integrate-dsh-0.2`）
-- 插件版本：`@junjiangao/dsh-web-mcp-manager@0.3.1`
+- 插件版本：`@junjiangao/dsh-web-mcp-manager@0.4.0`（本轮从 `0.3.1` 升上来，见 `package.json`）
 - 对照运行时：DeepSeek Harness **0.2.1-alpha.1.20261004.2**（本机唯一安装版本，`~/.dsh/profiles/desktop` 正在使用）
 - 核查日期：2026-10-04
 - 基线状态：`npx vitest run` → 9 个文件 / 53 个用例全绿；`lib/` 已随仓库提交（`index.js` 1105 行、`client.js` 1785 行）
