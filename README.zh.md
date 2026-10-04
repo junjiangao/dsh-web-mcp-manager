@@ -51,12 +51,38 @@ dsh plugin --profile web add github:junjiangao/dsh-web-mcp-manager#main
 重述每个服务。调用 `ctx.settings.configure({ auto: false })` 关闭通用自动表单；本插件自带的
 “设置 → MCP”面板是该条目的唯一编辑入口。
 
-Host 半边在注入集中声明
-`webServer`，并在该服务上注册自有的、带鉴权的 `/mcp-manager` RPC 路由。插件刻意
-不使用 `connection.rpc.handle()`：该 API 解析 `owner.webServer` 时从 Connection 的
-fiber 出发，而不是调用方 fiber，会以
-`cannot get property "webServer" without inject` 让 profile 启动失败。浏览器半边仍
-使用标准 Connection RPC 信封，因此无需 patch 任何其他插件。
+Host 半边在注入集中声明 `connection`（不再需要 `webServer`），并通过
+`ctx.connection.fetch.register()` 在 Connection 服务自有的共享 `/api` 通道上为**每个端点注册一条精确
+Fetch 路由**（`src/host/rpc-channel.ts`）。物理 `/api` 前缀路由由
+`@deepseek-ai/dsh-client-connection` 自己挂载，Host/Origin 栅栏与浏览器鉴权在任何 handler
+运行之前就已生效，因此本插件不再自持任何 HTTP 路由。相邻的两个 API 被刻意排除：
+
+- `connection.rpc.handle()` 挂载物理路由时走 `owner.webServer`，而 `owner` 是 Connection
+  服务自身的 Context 而非调用方 fiber，会以
+  `cannot get property "webServer" without inject` 让 profile 启动失败。
+- `connection.rpc.intercept('/api', …)` 每个 channel 只允许一个拦截器，而它已被
+  `@deepseek-ai/dsh-api-gateway` 占用。
+
+浏览器半边仍使用标准 Connection RPC 信封
+（`connection.rpc.call('/api', 'mcp-manager/<endpoint>', …)`），因此无需 patch 任何其他插件。
+精确 Fetch 路由继承载体 300 MiB 的缓冲上限，管理器在 handler 内自行坚持 2 MiB 上限。
+
+### 依赖面与升级安全
+
+`@deepseek-ai/*` 由运行中的 dsh 运行时提供，永远不会装进 profile
+（`autoInstallPeers: false`）。dsh 会把 profile 内插件的 bare specifier 路由到自己的包表，而
+**只有插件声明过的包才会建立这层路由** —— 因此每一个“值导入”都必须出现在
+`peerDependencies` 中。`tests/dependency-surface.spec.ts` 同时守护这条规则、它的反面（不声明
+从未引用的 peer）以及 `dsh.client.inject` 的浏览器模块表契约。
+
+dsh 还会在加载插件前执行兼容门：运行版本不满足某个 `@deepseek-ai/dsh*` peer 要求时，该 Loader
+行会被**禁用**，并给出 `dsh plugin allow-version`（或插件管理器）的补救入口 —— 它把精确的
+`插件@版本 → dsh 版本` 豁免写进 `~/.dsh/profiles/<profile>/compatibility.json`。
+`pnpm check:compat [version]` 在本地复现该判定，包含其 `includePrerelease: true` 细节 ——
+没有这一项，`^0.2.0-rc.1` 会错误地拒绝 `0.2.1-alpha.1`。CI 会对支持区间的两端各跑一次。
+
+`@deepseek-ai/schemastery` 声明为 peer 而非 dependency，使插件与 dsh 共用同一个 schema
+实例；profile 因此不会为本插件安装任何 `@deepseek-ai/*` 包。
 
 ## 开发与更新产物
 
@@ -64,6 +90,9 @@ fiber 出发，而不是调用方 fiber，会以
 
 ```bash
 pnpm install
+pnpm run typecheck
+pnpm test
+pnpm run check:compat
 pnpm run build
 ```
 

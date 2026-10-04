@@ -8,7 +8,7 @@ import type {
 } from '../types.ts'
 import { isRpcResult } from '../types.ts'
 import type {} from '@deepseek-ai/dsh-client-connection/client'
-import { MCP_MANAGER_CHANNEL } from '../types.ts'
+import { MCP_MANAGER_API_CHANNEL, MCP_MANAGER_ENDPOINT_PREFIX } from '../types.ts'
 
 export class McpManagerRpcError extends Error {
   readonly code: RpcError['code']
@@ -32,7 +32,14 @@ export interface ManagerClientApi {
 export function createManagerApi(ctx: Context): ManagerClientApi {
   const rpc = ctx.get('connection').rpc as ClientConnectionRpc
   const call = async <T>(endpoint: ManagerRpcEndpoint, payload: unknown, signal?: AbortSignal): Promise<T> => {
-    const result: unknown = await rpc.call(MCP_MANAGER_CHANNEL, endpoint, payload, signal)
+    // The channel grammar admits a single path segment, so the manager prefix
+    // rides inside the endpoint: `/api` + `mcp-manager/<endpoint>`.
+    const result: unknown = await rpc.call(
+      MCP_MANAGER_API_CHANNEL,
+      `${MCP_MANAGER_ENDPOINT_PREFIX}/${endpoint}`,
+      payload,
+      signal,
+    )
     if (!isRpcResult<T>(result)) throw new Error('MCP manager returned an invalid RPC response')
     if (!result.ok) throw new McpManagerRpcError(result.error)
     return result.value

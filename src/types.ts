@@ -1,10 +1,63 @@
 /** Shared JSON-safe contracts for the Host RPC and the browser panel. */
 
-export const MCP_MANAGER_CHANNEL = '/mcp-manager' as const
-export const MCP_MANAGER_SETTINGS_NAMESPACE = 'web-mcp-manager' as const
+/**
+ * Shared channel carrying the manager's authenticated RPC.
+ *
+ * The manager rides the Connection service's own `/api` channel instead of
+ * claiming a private prefix route:
+ *
+ * - The physical `/api` route is mounted by `@deepseek-ai/dsh-client-connection`
+ *   itself and applies the Host/Origin fence plus browser authentication before
+ *   anything reaches a handler, so this plugin never repeats that logic.
+ * - `connection.rpc.handle(channel, …)` cannot be used: its `register()` mounts
+ *   the physical route through `owner.webServer` where `owner` is the Connection
+ *   service's own Context, which fails with `cannot get property "webServer"
+ *   without inject`.
+ * - `connection.rpc.intercept('/api', …)` cannot be used either: the shared
+ *   channel accepts exactly one interceptor and `@deepseek-ai/dsh-api-gateway`
+ *   already owns it.
+ * - `connection.fetch.register()` is therefore the supported path: one exact
+ *   Fetch route per endpoint, taking precedence over the interceptor.
+ */
+export const MCP_MANAGER_API_CHANNEL = '/api' as const
+/** Endpoint prefix this plugin owns inside the shared channel. */
+export const MCP_MANAGER_ENDPOINT_PREFIX = 'mcp-manager' as const
+
+/** Every manager endpoint, in registration order. */
+export const MCP_MANAGER_ENDPOINTS = [
+  'snapshot',
+  'upsertServer',
+  'removeServer',
+  'setServerEnabled',
+  'reloadServer',
+  'setToolEnabled',
+] as const
+
+export type ManagerRpcEndpoint = typeof MCP_MANAGER_ENDPOINTS[number]
+
+/**
+ * Absolute exact Fetch-route path for one endpoint.
+ *
+ * The browser client posts to `<channel>/<endpoint>`, its channel grammar
+ * (`/^\/[A-Za-z0-9._~-]+$/`) admits a single segment only, so the channel is
+ * `/api` and the endpoint string carries the `mcp-manager/` prefix.
+ * @param endpoint - one manager endpoint name.
+ * @returns the path registered through `connection.fetch.register()`.
+ */
+export function mcpManagerRoutePath(endpoint: ManagerRpcEndpoint): string {
+  return `${MCP_MANAGER_API_CHANNEL}/${MCP_MANAGER_ENDPOINT_PREFIX}/${endpoint}`
+}
 
 export type ServerTransport = 'stdio' | 'streamable-http'
 export type ServerStatus = 'disabled' | 'waiting' | 'loading' | 'loaded' | 'failed'
+
+/**
+ * Every place a server definition can come from, in precedence order: a later
+ * entry never overrides an earlier one. `entry` is the legacy Loader-entry
+ * store the plugin used before `mcp.json` support.
+ */
+export const MCP_SCOPES = ['project', 'profile', 'user', 'entry'] as const
+export type McpScope = typeof MCP_SCOPES[number]
 
 export interface ReconnectPolicy {
   enabled: boolean
@@ -18,6 +71,33 @@ export interface SecretState {
   readonly set: boolean
   /** Whether the stored value should be masked in the panel (sensitive key). */
   readonly sensitive: boolean
+}
+
+/** One `mcp.json` source row as the panel renders it. */
+export interface McpSourceView {
+  readonly scope: McpScope
+  readonly path: string
+  readonly writable: boolean
+  /** Another client's file merged below this scope's own file. */
+  readonly compat: boolean
+  readonly exists: boolean
+  readonly serverCount: number
+  readonly error?: string
+  /** Per-entry failures inside an otherwise readable file. */
+  readonly problems?: readonly { readonly id: string; readonly error: string }[]
+}
+
+/** One workspace the project scope may be rooted at. */
+export interface WorkspaceView {
+  readonly id: string
+  readonly path: string
+  readonly title: string
+}
+
+/** Environment variables one stored server keeps as `${…}` templates. */
+export interface ServerTemplates {
+  readonly env: readonly string[]
+  readonly headers: readonly string[]
 }
 
 export interface ManagedServerView {
@@ -36,6 +116,12 @@ export interface ManagedServerView {
   readonly status: ServerStatus
   readonly error?: string
   readonly toolCount: number
+  /** The scope whose definition won. */
+  readonly scope: McpScope
+  /** Lower-precedence definitions of the same name that lost. */
+  readonly shadowed: readonly McpScope[]
+  /** Values this server keeps as environment templates rather than literals. */
+  readonly templates: ServerTemplates
 }
 
 export interface ManagedToolView {
@@ -63,6 +149,12 @@ export interface Snapshot {
   readonly servers: readonly ManagedServerView[]
   readonly tools: readonly ManagedToolView[]
   readonly readonlyEntries: readonly ReadonlyMcpEntry[]
+  /** Every `mcp.json` source row plus the legacy entry row. */
+  readonly sources: readonly McpSourceView[]
+  /** Registered workspaces the project scope may be rooted at. */
+  readonly workspaces: readonly WorkspaceView[]
+  /** The project root this snapshot was resolved against, when one was selected. */
+  readonly projectPath?: string
 }
 
 export interface SecretPatch {
@@ -76,6 +168,8 @@ export type SecretInput = string | SecretPatch
 
 export interface ServerPatch {
   readonly id: string
+  /** Target scope for this write; the panel defaults to the winning scope. */
+  readonly scope?: McpScope
   readonly label?: string
   readonly enabled?: boolean
   readonly transport?: ServerTransport
@@ -93,21 +187,32 @@ export interface ServerPatch {
   readonly reconnect?: Partial<ReconnectPolicy>
 }
 
-export interface SnapshotRequest {
+/**
+ * Where a write lands.
+ *
+ * A `project` scope is only accepted when `projectPath` names a registered
+ * workspace root; the Host never writes outside a root it can prove.
+ */
+export interface ScopeTarget {
+  readonly scope?: McpScope
+  readonly projectPath?: string
+}
+
+export interface SnapshotRequest extends ScopeTarget {
   readonly expectedRevision?: number
 }
 
-export interface UpsertServerRequest {
+export interface UpsertServerRequest extends ScopeTarget {
   readonly server: ServerPatch
   readonly expectedRevision: number
 }
 
-export interface RemoveServerRequest {
+export interface RemoveServerRequest extends ScopeTarget {
   readonly id: string
   readonly expectedRevision: number
 }
 
-export interface SetServerEnabledRequest {
+export interface SetServerEnabledRequest extends ScopeTarget {
   readonly id: string
   readonly enabled: boolean
   readonly expectedRevision: number
@@ -117,7 +222,7 @@ export interface ReloadServerRequest {
   readonly id: string
 }
 
-export interface SetToolEnabledRequest {
+export interface SetToolEnabledRequest extends ScopeTarget {
   readonly serverId: string
   readonly name: string
   readonly enabled: boolean
@@ -140,14 +245,6 @@ export interface RpcError {
 export type RpcResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: RpcError }
-
-export type ManagerRpcEndpoint =
-  | 'snapshot'
-  | 'upsertServer'
-  | 'removeServer'
-  | 'setServerEnabled'
-  | 'reloadServer'
-  | 'setToolEnabled'
 
 export interface StoredReconnectPolicy {
   enabled: boolean

@@ -55,14 +55,48 @@ restates every server. `ctx.settings.configure({ auto: false })` is used to keep
 the generic generated form off: the purpose-built Settings → MCP panel is the
 sole editor for this entry.
 
-The Host entry
-declares `webServer` in its injection set and registers its own authenticated
-`/mcp-manager` RPC route on that service. It deliberately does not use
-`connection.rpc.handle()`: that API resolves `owner.webServer` from the
-Connection fiber rather than the caller fiber and therefore fails at profile
-startup with `cannot get property "webServer" without inject`. The browser half
-keeps using the standard Connection RPC envelope, so no other plugin needs to be
-patched.
+The Host entry declares `connection` (not `webServer`) in its injection set and
+registers one **exact Fetch route per endpoint** on the Connection service's own
+shared `/api` channel through `ctx.connection.fetch.register()`
+(`src/host/rpc-channel.ts`). The physical `/api` prefix route is mounted by
+`@deepseek-ai/dsh-client-connection` itself, so the Host/Origin fence and
+browser authentication are applied before any handler runs and this plugin owns
+no HTTP route. Two adjacent APIs stay deliberately unused:
+
+- `connection.rpc.handle()` mounts its physical route through
+  `owner.webServer`, where `owner` is the Connection service's own Context rather
+  than the caller's, and fails at profile startup with
+  `cannot get property "webServer" without inject`.
+- `connection.rpc.intercept('/api', …)` admits exactly one interceptor per
+  channel, and `@deepseek-ai/dsh-api-gateway` already owns it.
+
+The browser half keeps using the standard Connection RPC envelope
+(`connection.rpc.call('/api', 'mcp-manager/<endpoint>', …)`), so no other plugin
+needs to be patched. Exact Fetch routes carry a 300 MiB buffered-body cap from
+the carrier; the manager enforces its own 2 MiB ceiling inside each handler.
+
+### Dependency surface and upgrade safety
+
+`@deepseek-ai/*` packages are supplied by the running runtime, never installed
+into the profile (`autoInstallPeers: false`). dsh routes a profile plugin's bare
+specifiers through its own package table, and it only builds that routing layer
+for packages the plugin **declares** — so every value import must appear in
+`peerDependencies`. `tests/dependency-surface.spec.ts` enforces that, plus the
+converse (no peer the plugin never references) and the `dsh.client.inject`
+module-table contract.
+
+dsh also gates every profile plugin before loading it: a `@deepseek-ai/dsh*`
+peer requirement the running version does not satisfy leaves the Loader row
+**disabled**, with a `dsh plugin allow-version` (or Plugins page) remedy writing
+an exact `plugin@version → dsh version` exemption into
+`~/.dsh/profiles/<profile>/compatibility.json`. `pnpm check:compat [version]`
+reproduces that gate locally, including its `includePrerelease: true` detail —
+without it `^0.2.0-rc.1` would wrongly reject `0.2.1-alpha.1`. CI runs it
+against both ends of the supported train.
+
+`@deepseek-ai/schemastery` is a peer rather than a dependency so the plugin and
+dsh share one schema instance; the profile therefore installs no
+`@deepseek-ai/*` package for this plugin at all.
 
 ## Development and artifacts
 
@@ -70,6 +104,9 @@ Source lives in `src/`; GitHub installation consumes the committed `lib/` artifa
 
 ```bash
 pnpm install
+pnpm run typecheck
+pnpm test
+pnpm run check:compat
 pnpm run build
 ```
 

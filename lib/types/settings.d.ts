@@ -39,6 +39,16 @@ export declare function defaultDocument(): SettingsDocument;
 export declare function validateStoredDocument(value: SettingsDocument): void;
 export declare function validateServerId(id: string): void;
 export declare function validateServerConfig(server: StoredServer): void;
+/**
+ * Whether a stored value is still an unresolved environment template.
+ *
+ * A template is legal in `mcp.json` and resolved by the Host immediately before
+ * it mounts the server, so shape checks that need the final text (URL parsing)
+ * are deferred until then.
+ * @param value - the stored value.
+ * @returns true when the value carries at least one reference.
+ */
+export declare function isTemplatedValue(value: string): boolean;
 export declare function validateReconnect(value: ReconnectPolicy): void;
 export declare function transportOf(value: string): ServerTransport;
 //# sourceMappingURL=settings.d.ts.map

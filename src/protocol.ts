@@ -1,8 +1,10 @@
 /** Runtime validation and redacted projections for the manager RPC. */
 
 import type {
-  ManagedServerView, ManagedToolView, ReconnectPolicy, SecretInput, SecretState, ServerPatch, StoredServer,
+  ManagedServerView, ManagedToolView, McpScope, ReconnectPolicy, SecretInput, SecretState, ServerPatch, ServerTemplates,
+  SetServerEnabledRequest, SetToolEnabledRequest, ScopeTarget, SnapshotRequest, StoredServer, UpsertServerRequest,
 } from './types.ts'
+import { MCP_SCOPES } from './types.ts'
 import { defaultServer, DEFAULT_RECONNECT, DEFAULT_TOOL_CALL_TIMEOUT_MS, transportOf, validateReconnect, validateServerConfig, validateServerId } from './settings.ts'
 
 const MAX_LABEL_LENGTH = 120
@@ -36,27 +38,55 @@ export function asOptionalRevision(value: unknown): number | undefined {
   return value === undefined ? undefined : asRevision(value)
 }
 
-export function parseSnapshotRequest(value: unknown): { expectedRevision?: number } {
+export function parseSnapshotRequest(value: unknown): SnapshotRequest {
   const record = asRecord(value ?? {}, 'snapshot payload must be an object')
-  if (record.expectedRevision === undefined) return {}
-  return { expectedRevision: asRevision(record.expectedRevision) }
+  return {
+    ...record.expectedRevision === undefined ? {} : { expectedRevision: asRevision(record.expectedRevision) },
+    ...parseScopeTarget(record),
+  }
 }
 
-export function parseIdRequest(value: unknown): { id: string; expectedRevision?: number } {
+/** Read the optional scope/project selection every mutating endpoint accepts. */
+function parseScopeTarget(record: Record<string, unknown>): ScopeTarget {
+  const scope = record.scope === undefined ? undefined : asScope(record.scope, 'scope')
+  const projectPath = record.projectPath === undefined ? undefined : asString(record.projectPath, 'projectPath')
+  if (projectPath !== undefined && !isAbsolutePath(projectPath)) {
+    throw new TypeError('projectPath must be an absolute path')
+  }
+  return {
+    ...scope === undefined ? {} : { scope },
+    ...projectPath === undefined ? {} : { projectPath },
+  }
+}
+
+function asScope(value: unknown, field: string): McpScope {
+  if (typeof value !== 'string' || !(MCP_SCOPES as readonly string[]).includes(value)) {
+    throw new TypeError(`${field} must be one of ${MCP_SCOPES.map(scope => JSON.stringify(scope)).join(', ')}`)
+  }
+  return value as McpScope
+}
+
+/** POSIX absolute, Windows drive, or UNC — the spellings a Workspace root uses. */
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(path) || path.startsWith('\\\\')
+}
+
+export function parseIdRequest(value: unknown): { id: string; expectedRevision?: number } & ScopeTarget {
   const record = asRecord(value, 'request payload must be an object')
   const id = asString(record.id, 'id')
   validateServerId(id)
   return {
     id,
     ...record.expectedRevision === undefined ? {} : { expectedRevision: asRevision(record.expectedRevision) },
+    ...parseScopeTarget(record),
   }
 }
 
-export function parseSetEnabledRequest(value: unknown): { id: string; enabled: boolean; expectedRevision: number } {
+export function parseSetEnabledRequest(value: unknown): SetServerEnabledRequest {
   const record = asRecord(value, 'setServerEnabled payload must be an object')
   const base = parseIdRequest(record)
   if (base.expectedRevision === undefined) throw new TypeError('expectedRevision is required')
-  return { id: base.id, enabled: asBoolean(record.enabled, 'enabled'), expectedRevision: base.expectedRevision }
+  return { ...base, enabled: asBoolean(record.enabled, 'enabled'), expectedRevision: base.expectedRevision }
 }
 
 export function parseReloadRequest(value: unknown): { id: string } {
@@ -66,14 +96,14 @@ export function parseReloadRequest(value: unknown): { id: string } {
   return { id }
 }
 
-export function parseUpsertRequest(value: unknown): { server: ServerPatch; expectedRevision: number } {
+export function parseUpsertRequest(value: unknown): UpsertServerRequest {
   const record = asRecord(value, 'upsertServer payload must be an object')
   const expectedRevision = asRevision(record.expectedRevision)
   const server = parseServerPatch(record.server)
-  return { server, expectedRevision }
+  return { server, expectedRevision, ...parseScopeTarget(record) }
 }
 
-export function parseToolRequest(value: unknown): { serverId: string; name: string; enabled: boolean; expectedRevision: number } {
+export function parseToolRequest(value: unknown): SetToolEnabledRequest {
   const record = asRecord(value, 'setToolEnabled payload must be an object')
   const serverId = asString(record.serverId, 'serverId')
   validateServerId(serverId)
@@ -84,6 +114,7 @@ export function parseToolRequest(value: unknown): { serverId: string; name: stri
     name,
     enabled: asBoolean(record.enabled, 'enabled'),
     expectedRevision: asRevision(record.expectedRevision),
+    ...parseScopeTarget(record),
   }
 }
 
@@ -135,6 +166,7 @@ function parseServerPatch(value: unknown): ServerPatch {
   validateServerId(id)
   const result: ServerPatch = {
     id,
+    ...record.scope === undefined ? {} : { scope: asScope(record.scope, 'server.scope') },
     ...record.label === undefined ? {} : { label: asString(record.label, 'server.label') },
     ...record.enabled === undefined ? {} : { enabled: asBoolean(record.enabled, 'server.enabled') },
     ...record.transport === undefined ? {} : { transport: transportOf(asString(record.transport, 'server.transport')) },
@@ -242,6 +274,9 @@ export function redactServer(
   status: ManagedServerView['status'],
   toolCount: number,
   error?: string,
+  scope: McpScope = 'entry',
+  shadowed: readonly McpScope[] = [],
+  templates: ServerTemplates = { env: [], headers: [] },
 ): ManagedServerView {
   return {
     id: server.id,
@@ -259,6 +294,9 @@ export function redactServer(
     status,
     ...error === undefined ? {} : { error },
     toolCount,
+    scope,
+    shadowed: [...shadowed],
+    templates: { env: [...templates.env], headers: [...templates.headers] },
   }
 }
 

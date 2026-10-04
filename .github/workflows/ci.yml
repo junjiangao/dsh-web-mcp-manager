@@ -32,6 +32,13 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # dsh disables any profile plugin whose @deepseek-ai/dsh* peer range the
+      # running runtime rejects, so check both ends of the supported train.
+      - name: Check dsh compatibility
+        run: |
+          pnpm check:compat 0.2.0-rc.1
+          pnpm check:compat 0.2.1-alpha.1
+
       - name: Build
         run: pnpm build
 
